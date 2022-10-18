@@ -45,19 +45,21 @@ static char *shell;
 static void *stash;
 static int verbose;
 
-#define MDSH_CMDRE "MDSH_CMDRE"
-#define MDSH_DBGSH "MDSH_DBGSH"
-#define MDSH_EFLAG "MDSH_EFLAG"
-#define MDSH_PRE_FLUSH_PATHS "MDSH_PRE_FLUSH_PATHS"
-#define MDSH_POST_FLUSH_PATHS "MDSH_POST_FLUSH_PATHS"
-#define MDSH_HTTP_SERVER "MDSH_HTTP_SERVER"
-#define MDSH_XTEVS "MDSH_XTEVS"
-#define MDSH_PS1 "MDSH>> "
-#define MDSH_PATHS "MDSH_PATHS"
-#define MDSH_SHELL "MDSH_SHELL"
-#define MDSH_TIMING "MDSH_TIMING"
-#define MDSH_VERBOSE "MDSH_VERBOSE"
-#define MDSH_XTRACE "MDSH_XTRACE"
+#define PFX "MDSH"
+#define EV_PS1 PFX ">> "
+#define EV_CMDRE PFX "_CMDRE"
+#define EV_DBGSH PFX "_DBGSH"
+#define EV_EFLAG PFX "_EFLAG"
+#define EV_PRE_FLUSH_PATHS PFX "_PRE_FLUSH_PATHS"
+#define EV_POST_FLUSH_PATHS PFX "_POST_FLUSH_PATHS"
+#define EV_HTTP_SERVER PFX "_HTTP_SERVER"
+#define EV_XTEVS PFX "_XTEVS"
+#define EV_PATHS PFX "_PATHS"
+#define EV_PWD PFX "_PWD"
+#define EV_SHELL PFX "_SHELL"
+#define EV_TIMING PFX "_TIMING"
+#define EV_VERBOSE PFX "_VERBOSE"
+#define EV_XTRACE PFX "_XTRACE"
 
 #define MARK "==-=="
 #define SEP ":"
@@ -78,39 +80,43 @@ but in all other ways it's a pass-through to the shell and\n\
 thus behaves exactly the same. Its only value-added comes\n\
 from the env variables listed below which can trigger pre-\n\
 and post-actions. The idea is that setting GNU make's\n\
-SHELL=%s along with some subset of the MDSH_* environment\n\
+SHELL=%s along with some subset of the %s_* environment\n\
 variables below may help diagnose complex make problems.\n",
-    prog, prog);
+    prog, prog, PFX);
 
-    fprintf(f, "\nThe variable MDSH_SHELL overrides the default shell (/bin/sh).\n");
+    fprintf(f, "\nThe variable %s overrides the default shell (/bin/sh).\n", EV_SHELL);
 
     fprintf(f, "\n\
-MDSH_PATHS is a colon-separated list of glob patterns representing\n\
+%s is a colon-separated list of glob patterns representing\n\
 paths to keep an eye on and report when the shell process has changed\n\
-any of their states (created, removed, written, or accessed/read).\n");
+any of their states (created, removed, written, or accessed/read).\n", EV_PATHS);
 
     fprintf(f, "\n\
-If MDSH_VERBOSE is set (nonzero) the command line will be printed\n\
-along with each MDSH_PATHS change message.\n");
+If %s is set (nonzero) the command line will be printed\n\
+along with each %s change message.\n", EV_VERBOSE, EV_PATHS);
 
     fprintf(f, "\n\
-If MDSH_XTRACE is set the shell command will be printed as\n\
-with 'set -x'.\n");
+If %s is set the current working directory will be printed\n\
+before each shell command.\n", EV_PWD);
 
     fprintf(f, "\n\
-MDSH_TIMING is similar to MDSH_XTRACE but the command is\n\
-printed after it finishes along with the time it took.\n");
+If %s is set the shell command will be printed as\n\
+with 'set -x'.\n", EV_XTRACE);
 
     fprintf(f, "\n\
-If a regular expression is supplied with MDSH_CMDRE it will be\n\
+%s is similar to %s but the command is printed after it finishes\n\
+along with the time it took.\n", EV_TIMING, EV_XTRACE);
+
+    fprintf(f, "\n\
+If a regular expression is supplied with %s it will be\n\
 compared against the shell command. If a match is found an\n\
-interactive debug shell will be invoked before the command runs.\n");
+interactive debug shell will be invoked before the command runs.\n", EV_CMDRE);
 
     fprintf(f, "\n\
 If the underlying shell process exits with a failure status and\n\
-MDSH_DBGSH is set, %s will run an interactive shell to help\n\
+%s is set, %s will run an interactive shell to help\n\
 analyze the failing state.\n",
-    prog);
+    EV_DBGSH, prog);
 
     fprintf(f, "\n\
 However, be aware that starting an interactive debug shell can\n\
@@ -118,17 +124,19 @@ run into trouble in -j mode which sometimes closes stdin. Such a\n\
 shell requires stdin and stdout to be available to the terminal.\n");
 
     fprintf(f, "\n\
-MDSH_PRE_FLUSH_PATHS and MDSH_POST_FLUSH_PATHS are colon-separated\n\
+%s and %s are colon-separated\n\
 lists of paths on which to attempt NFS cache-flushing before or after\n\
 the recipe runs. The first thing done with each listed path, if it's\n\
 a directory, is to open and close it. This may flush the filehandle\n\
-cache according to http://tss.iki.fi/nfs-coding-howto.html.\n");
+cache according to http://tss.iki.fi/nfs-coding-howto.html.\n",
+    EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
 
     fprintf(f, "\n\
-If MDSH_HTTP_SERVER is passed it should be the name of an HTTP server\n\
+If %s is passed it should be the name of an HTTP server\n\
 with read access to listed files. A GET request will be issued for each\n\
-path on MDSH_PRE_FLUSH_PATHS whether file or directory. This is said to\n\
-force all dirty NFS caches for that path to be flushed.\n");
+path on %s whether file or directory. This is said to\n\
+force all dirty NFS caches for that path to be flushed.\n",
+    EV_HTTP_SERVER, EV_PRE_FLUSH_PATHS);
 
     fprintf(f, "\n\
 NFS cache flushing is a very complex topic and the situation varies by\n\
@@ -139,10 +147,10 @@ techniques are supported and both 'pull' (flush before reading) and 'push'\n\
     fprintf(f, "\n\
 A hypothetical linker recipe could flush the directory containing object\n\
 files to make sure they're all present before it starts linking by\n\
-setting MDSH_PRE_FLUSH_PATHS=$(@D), for instance. Or $^ could be flushed.\n\
+setting %s=$(@D), for instance. Or $^ could be flushed.\n\
 Generally we think pull is more correct than push but having a compile\n\
-recipe, say, use MDSH_POST_FLUSH_PATHS=$@ to push-flush the .o may be\n\
-worth experimenting with too.\n");
+recipe, say, use %s=$@ to push-flush the .o may be\n\
+worth experimenting with too.\n", EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
@@ -227,6 +235,7 @@ report(const char *path, const char *change)
 
         insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
         fprintf(stderr, " [%s] (%s ", cwd, shell);
+        free(cwd);
         for (i = 1; argv_[i]; i++) {
             if (strpbrk(argv_[i], " \t")) {
                 fprintf(stderr, "'%s'", argv_[i]);
@@ -294,16 +303,16 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
 {
     int i;
 
-    if (getenv(MDSH_XTEVS)) {
+    if (getenv(EV_XTEVS)) {
         char *evlist, *ev;
 
-        insist((evlist = strdup(getenv(MDSH_XTEVS))) != NULL, "strdup()");
+        insist((evlist = strdup(getenv(EV_XTEVS))) != NULL, "strdup()");
         for (ev = strtok(evlist, SEP); ev; ev = strtok(NULL, SEP)) {
             if (getenv(ev)) {
                 fprintf(stderr, "+++ %s=%s\n", ev, getenv(ev));
             }
         }
-        (void)free(evlist);
+        free(evlist);
     }
 
     fputs(pfx ? pfx : "+ ", stderr);
@@ -348,7 +357,7 @@ dbgsh(int argc, char *argv[])
                            "open(/dev/tty)");
                 }
             }
-            insist(!setenv("PS1", MDSH_PS1, 1), NULL);
+            insist(!setenv("PS1", EV_PS1, 1), NULL);
             (void)execlp(basename(shell), shell, "--norc", "-i", (char *)NULL);
             error(shell, strerror(errno)); // NOTREACHED
         }
@@ -525,7 +534,7 @@ nfs_flush(const char *ev)
         const char *path;
         char *http_server;
 
-        http_server = getenv(MDSH_HTTP_SERVER);
+        http_server = getenv(EV_HTTP_SERVER);
 
         insist((paths = strdup(paths)) != NULL, "strdup(paths)");
         for (path = strtok(paths, SEP); path; path = strtok(NULL, SEP)) {
@@ -561,7 +570,7 @@ nfs_flush(const char *ev)
                 (void)closedir(odir);
             }
         }
-        (void)free(paths);
+        free(paths);
     }
 
     return 0;
@@ -575,7 +584,7 @@ main(int argc, char *argv[])
     struct timeval pretime;
 
     argv_ = argv; // Hack to preserve command line for later verbosity.
-    verbose = ev2int(MDSH_VERBOSE); // Global verbosity flag.
+    verbose = ev2int(EV_VERBOSE); // Global verbosity flag.
 
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
@@ -584,19 +593,19 @@ main(int argc, char *argv[])
         usage(0);
     }
 
-    if (!(shell = getenv(MDSH_SHELL))) {
+    if (!(shell = getenv(EV_SHELL))) {
         shell = "/bin/sh";
     }
 
-    if (ev2int(MDSH_XTRACE)) {
+    if (ev2int(EV_XTRACE)) {
         xtrace(argc, argv, NULL, NULL);
     }
 
-    // Optionally flush before the recipe.
-    (void)nfs_flush(MDSH_PRE_FLUSH_PATHS);
+    // Optionally flush NFS before the recipe.
+    (void)nfs_flush(EV_PRE_FLUSH_PATHS);
 
     // Record the state (absence/presence and atime/mtime if present) of files.
-    if ((watch = getenv(MDSH_PATHS))) {
+    if ((watch = getenv(EV_PATHS))) {
         size_t i;
         glob_t found;
         int globflags = GLOB_NOCHECK;
@@ -642,14 +651,14 @@ main(int argc, char *argv[])
         }
 
         globfree(&found);
-        (void)free(watch);
+        free(watch);
     }
 
-    if (getenv(MDSH_CMDRE)) {
+    if (getenv(EV_CMDRE)) {
         size_t i;
         regex_t re;
 
-        insist(regcomp(&re, getenv(MDSH_CMDRE), REG_EXTENDED) == 0, "regcomp()");
+        insist(regcomp(&re, getenv(EV_CMDRE), REG_EXTENDED) == 0, "regcomp()");
         for (i = 1; argv[i]; i++) {
             if (argv[i - 1][0] == '-' && strchr(argv[i - 1], 'c')) {
                 if (!regexec(&re, argv[i], 0, NULL, 0)) {
@@ -661,7 +670,16 @@ main(int argc, char *argv[])
         regfree(&re);
     }
 
-    if (ev2int(MDSH_TIMING)) {
+    if (ev2int(EV_PWD)) {
+        char *cwd;
+
+        insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
+        fprintf(stderr, "[%s] ", cwd);
+        free(cwd);
+        insist(!fflush(stderr), "fflush(stderr)");
+    }
+
+    if (ev2int(EV_TIMING)) {
         insist(!gettimeofday(&pretime, NULL), "gettimeofday(&pretime, NULL)");
     }
 
@@ -680,9 +698,9 @@ main(int argc, char *argv[])
     }
 
     // Optionally flush after the recipe.
-    (void)nfs_flush(MDSH_POST_FLUSH_PATHS);
+    (void)nfs_flush(EV_POST_FLUSH_PATHS);
 
-    if (ev2int(MDSH_TIMING)) {
+    if (ev2int(EV_TIMING)) {
         struct timeval endtime;
         char tbuf[256];
         double delta;
@@ -700,11 +718,11 @@ main(int argc, char *argv[])
     }
 
     if (rc != EXIT_SUCCESS) {
-        if (ev2int(MDSH_DBGSH)) {
+        if (ev2int(EV_DBGSH)) {
             dbgsh(argc, argv);
         }
 
-        if (ev2int(MDSH_EFLAG)) {
+        if (ev2int(EV_EFLAG)) {
             fprintf(stderr, "kill -INT %d\n", getppid());
             (void)kill(getppid(), SIGINT);
         }
