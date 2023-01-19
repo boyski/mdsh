@@ -68,14 +68,14 @@ static int verbose;
         (left.tv_sec == right.tv_sec && left.tv_nsec > right.tv_nsec))
 
 static void
-usage(int rc)
+usage(int rc, int level)
 {
     FILE *f = (rc == EXIT_SUCCESS) ? stdout : stderr;
 
     fprintf(f, "\
 %s: The 'Make Diagnosis Shell'.\n\n\
 This program execs the shell and passes its argv directly to it\n\
-unparsed. It prints this usage message with -h or --help\n\
+unparsed. It prints this usage message with {-h,-H,--help,--HELP}\n\
 but in all other ways it's a pass-through to the shell and\n\
 thus behaves exactly the same. Its only value-added comes\n\
 from the env variables listed below which can trigger pre-\n\
@@ -84,31 +84,34 @@ SHELL=%s along with some subset of the %s_* environment\n\
 variables below may help diagnose complex make problems.\n",
     prog, prog, PFX);
 
-    fprintf(f, "\nThe variable %s overrides the default shell (/bin/sh).\n", EV_SHELL);
+    fprintf(f, "\nPass -H|--HELP for advanced/experimental options.\n");
+
+    fprintf(f, "\nENVIRONMENT VARIABLES:\n");
+
+    fprintf(f, "\n%s: override the default shell (/bin/sh).\n", EV_SHELL);
 
     fprintf(f, "\n\
-%s is a colon-separated list of glob patterns representing\n\
+%s: a colon-separated list of glob patterns representing\n\
 paths to keep an eye on and report when the shell process has changed\n\
 any of their states (created, removed, written, or accessed/read).\n", EV_PATHS);
 
     fprintf(f, "\n\
-If %s is set (nonzero) the command line will be printed\n\
+%s: if set (nonzero), the command line will be printed\n\
 along with each %s change message.\n", EV_VERBOSE, EV_PATHS);
 
     fprintf(f, "\n\
-If %s is set the current working directory will be printed\n\
+%s: if set, the current working directory will be printed\n\
 before each shell command.\n", EV_PWD);
 
     fprintf(f, "\n\
-If %s is set the shell command will be printed as\n\
-with 'set -x'.\n", EV_XTRACE);
+%s: if set, the shell command will be printed a la set -x.\n", EV_XTRACE);
 
     fprintf(f, "\n\
-%s is similar to %s but the command is printed after it finishes\n\
-along with the time it took.\n", EV_TIMING, EV_XTRACE);
+%s: similar to %s but the command is printed along\n\
+with its run time.\n", EV_TIMING, EV_XTRACE);
 
     fprintf(f, "\n\
-If a regular expression is supplied with %s it will be\n\
+%s: if a regular expression is supplied here it will be\n\
 compared against the shell command. If a match is found an\n\
 interactive debug shell will be invoked before the command runs.\n", EV_CMDRE);
 
@@ -123,34 +126,37 @@ However, be aware that starting an interactive debug shell can\n\
 run into trouble in -j mode which sometimes closes stdin. Such a\n\
 shell requires stdin and stdout to be available to the terminal.\n");
 
-    fprintf(f, "\n\
-%s and %s are colon-separated\n\
-lists of paths on which to attempt NFS cache-flushing before or after\n\
-the recipe runs. The first thing done with each listed path, if it's\n\
-a directory, is to open and close it. This may flush the filehandle\n\
-cache according to http://tss.iki.fi/nfs-coding-howto.html.\n",
-    EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
+    if (level > 1) {
 
-    fprintf(f, "\n\
-If %s is passed it should be the name of an HTTP server\n\
-with read access to listed files. A GET request will be issued for each\n\
-path on %s whether file or directory. This is said to\n\
-force all dirty NFS caches for that path to be flushed.\n",
-    EV_HTTP_SERVER, EV_PRE_FLUSH_PATHS);
+        fprintf(f, "\n\
+    %s and %s are colon-separated\n\
+    lists of paths on which to attempt NFS cache-flushing before or after\n\
+    the recipe runs. The first thing done with each listed path, if it's\n\
+    a directory, is to open and close it. This may flush the filehandle\n\
+    cache according to http://tss.iki.fi/nfs-coding-howto.html.\n",
+        EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
 
-    fprintf(f, "\n\
-NFS cache flushing is a very complex topic and the situation varies by\n\
-protocol (NFSv3 vs v4 etc), NFS server vendor, etc. Multiple flushing\n\
-techniques are supported and both 'pull' (flush before reading) and 'push'\n\
-(flush after writing) models are supported to allow experimental tuning.\n");
+        fprintf(f, "\n\
+    If %s is passed it should be the name of an HTTP server\n\
+    with read access to listed files. A GET request will be issued for each\n\
+    path on %s whether file or directory. This is said to\n\
+    force all dirty NFS caches for that path to be flushed.\n",
+        EV_HTTP_SERVER, EV_PRE_FLUSH_PATHS);
 
-    fprintf(f, "\n\
-A hypothetical linker recipe could flush the directory containing object\n\
-files to make sure they're all present before it starts linking by\n\
-setting %s=$(@D), for instance. Or $^ could be flushed.\n\
-Generally we think pull is more correct than push but having a compile\n\
-recipe, say, use %s=$@ to push-flush the .o may be\n\
-worth experimenting with too.\n", EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
+        fprintf(f, "\n\
+    NFS cache flushing is a very complex topic and the situation varies by\n\
+    protocol (NFSvX), NFS server vendor, etc. Multiple flushing\n\
+    techniques are supported and both 'pull' (flush before reading) and 'push'\n\
+    (flush after writing) models are supported to allow experimental tuning.\n");
+
+        fprintf(f, "\n\
+    A hypothetical linker recipe could flush the directory containing object\n\
+    files to make sure they're all present before it starts linking by\n\
+    setting %s=$(@D), for instance. Or $^ could be flushed.\n\
+    Generally we think pull is more correct than push but having a compile\n\
+    recipe, say, use %s=$@ to push-flush the .o may be\n\
+    worth experimenting with too.\n", EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
+    }
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
@@ -590,7 +596,9 @@ main(int argc, char *argv[])
     prog[sizeof(prog) - 1] = '\0';
 
     if (!strcmp(argv[argc - 1], "-h") || !strcmp(argv[argc - 1], "--help")) {
-        usage(0);
+        usage(0, 1);
+    } else if (!strcmp(argv[argc - 1], "-H") || !strcmp(argv[argc - 1], "--HELP")) {
+        usage(0, 2);
     }
 
     if (!(shell = getenv(EV_SHELL))) {
