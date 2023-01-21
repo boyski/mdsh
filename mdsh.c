@@ -88,12 +88,13 @@ variables below may help diagnose complex make problems.\n",
 
     fprintf(f, "\nENVIRONMENT VARIABLES:\n");
 
-    fprintf(f, "\n%s: override the default shell (/bin/sh).\n", EV_SHELL);
+    fprintf(f, "\n%s: override the default shell [/bin/sh].\n", EV_SHELL);
 
     fprintf(f, "\n\
-%s: a colon-separated list of glob patterns representing\n\
-paths to keep an eye on and report when the shell process has changed\n\
-any of their states (created, removed, written, or accessed/read).\n", EV_PATHS);
+%s: a colon-separated list of glob patterns representing file\n\
+paths to keep an eye on and report when the shell process changes\n\
+any of their states (created, removed, written, or accessed/read).\n",
+EV_PATHS);
 
     fprintf(f, "\n\
 %s: if set (nonzero), the command line will be printed\n\
@@ -116,9 +117,9 @@ compared against the shell command. If a match is found an\n\
 interactive debug shell will be invoked before the command runs.\n", EV_CMDRE);
 
     fprintf(f, "\n\
-If the underlying shell process exits with a failure status and\n\
-%s is set, %s will run an interactive shell to help\n\
-analyze the failing state.\n",
+%s: if the underlying shell process exits with a failure status\n\
+and this is set, %s will run an interactive shell to help analyze\n\
+the failing state.\n",
     EV_DBGSH, prog);
 
     fprintf(f, "\n\
@@ -182,7 +183,7 @@ $ MDSH_TIMING=1 mdsh -c 'sleep 2.4'\n\
 - mdsh -c sleep 2.4 (2.4s)\n\
 \n\
 Real-life usage via make:\n\n\
-$ MDSH_PATHS=foo MDSH_VERBOSE=1 make SHELL=mdsh\n\
+$ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=mdsh\n\
 \n\
 $ make SHELL=mdsh MDSH_DBGSH=1\n\
 ");
