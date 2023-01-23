@@ -28,7 +28,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -48,6 +50,7 @@ static int verbose;
 #define PFX "MDSH"
 #define EV_PS1 PFX ">> "
 #define EV_CMDRE PFX "_CMDRE"
+#define EV_DB PFX "_DB"
 #define EV_DBGSH PFX "_DBGSH"
 #define EV_EFLAG PFX "_EFLAG"
 #define EV_PRE_FLUSH_PATHS PFX "_PRE_FLUSH_PATHS"
@@ -64,11 +67,14 @@ static int verbose;
 #define MARK "==-=="
 #define SEP ":"
 
+// Nanoseconds per second.
+#define NSECS 1000000000.0
+
 #define TIME_GT(left, right) ((left.tv_sec > right.tv_sec) || \
         (left.tv_sec == right.tv_sec && left.tv_nsec > right.tv_nsec))
 
 static void
-usage(int rc, int level)
+usage(int rc, int helplevel)
 {
     FILE *f = (rc == EXIT_SUCCESS) ? stdout : stderr;
 
@@ -112,6 +118,13 @@ before each shell command.\n", EV_PWD);
 with its run time.\n", EV_TIMING, EV_XTRACE);
 
     fprintf(f, "\n\
+%s: if present, points to a writable directory. Each\n\
+command will drop a file into that directory, named by its\n\
+start time in nanoseconds, summarizing it in .csv format:\n\
+[pid,ppid,retcode,run time,user cpu time,sys cpu time,cmd]\n",
+EV_DB);
+
+    fprintf(f, "\n\
 %s: if a regular expression is supplied here it will be\n\
 compared against the shell command. If a match is found an\n\
 interactive debug shell will be invoked before the command runs.\n", EV_CMDRE);
@@ -127,7 +140,7 @@ However, be aware that starting an interactive debug shell can\n\
 run into trouble in -j mode which sometimes closes stdin. Such a\n\
 shell requires stdin and stdout to be available to the terminal.\n");
 
-    if (level > 1) {
+    if (helplevel > 1) {
 
         fprintf(f, "\n\
     %s and %s are colon-separated\n\
@@ -587,8 +600,9 @@ int
 main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
-    char *watch, *pattern;
-    struct timeval pretime;
+    char *db_dir, *watch, *pattern;
+    struct timespec starttime, endtime;
+    pid_t pid;
 
     argv_ = argv; // Hack to preserve command line for later verbosity.
     verbose = ev2int(EV_VERBOSE); // Global verbosity flag.
@@ -688,13 +702,13 @@ main(int argc, char *argv[])
         insist(!fflush(stderr), "fflush(stderr)");
     }
 
-    if (ev2int(EV_TIMING)) {
-        insist(!gettimeofday(&pretime, NULL), "gettimeofday(&pretime, NULL)");
+    db_dir = getenv(EV_DB);
+    if (ev2int(EV_TIMING) || db_dir) {
+        insist(!clock_gettime(CLOCK_REALTIME, &starttime), "clock_gettime(CLOCK_REALTIME, &starttime)");
     }
 
     // Fork, exec, and wait for the shell.
     {
-        pid_t pid;
         int status = EXIT_SUCCESS;
 
         insist((pid = fork()) >= 0, "fork()");
@@ -709,16 +723,41 @@ main(int argc, char *argv[])
     // Optionally flush after the recipe.
     (void)nfs_flush(EV_POST_FLUSH_PATHS);
 
-    if (ev2int(EV_TIMING)) {
-        struct timeval endtime;
+    if (db_dir || ev2int(EV_TIMING)) {
         char tbuf[256];
-        double delta;
+        double elapsed_nsec;
 
-        insist(!gettimeofday(&endtime, NULL), "gettimeofday(&endtime, NULL)");
-        delta = ((endtime.tv_sec * 1000000.0) + endtime.tv_usec) -
-                ((pretime.tv_sec * 1000000.0) + pretime.tv_usec);
-        (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", delta / 1000000.0);
-        xtrace(argc, argv, "- ", tbuf);
+        insist(!clock_gettime(CLOCK_REALTIME, &endtime), "clock_gettime(CLOCK_REALTIME, &endtime)");
+        elapsed_nsec =
+            ((endtime.tv_sec * NSECS) + endtime.tv_nsec) -
+            ((starttime.tv_sec * NSECS) + starttime.tv_nsec);
+        (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", elapsed_nsec / NSECS);
+
+        if (ev2int(EV_TIMING)) {
+            xtrace(argc, argv, "- ", tbuf);
+        }
+
+        if (db_dir) {
+            struct rusage summary;
+            char *db_file;
+            FILE *fp;
+
+            insist(!getrusage(RUSAGE_CHILDREN, &summary), "getrusage(RUSAGE_CHILDREN, &summary)");
+            if (asprintf(&db_file, "%s/%s.%ld.%ld.csv",
+                    db_dir, prog, starttime.tv_sec, starttime.tv_nsec) == -1) {
+                error("asprintf()", strerror(errno));
+            }
+            insist((fp = fopen(db_file, "w")) != NULL, "fopen()");
+            // Note that the pid of *this* process is not shown.
+            // The "pid" is our child (shell) and the ppid is our parent.
+            insist(fprintf(fp, "%d,%d,%d,%f,%ld.%ld,%ld.%ld,%s\n",
+                        pid, getppid(), rc, elapsed_nsec / NSECS,
+                        summary.ru_utime.tv_sec, summary.ru_utime.tv_usec,
+                        summary.ru_stime.tv_sec, summary.ru_stime.tv_usec,
+                        argv[argc - 1]) > 0, "fprintf()");
+            (void)fclose(fp);
+            free(db_file);
+        }
     }
 
     // Revisit the original list of files and report any changes.

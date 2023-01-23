@@ -29,11 +29,23 @@ given file is modified, and there are a number of other things it can do
 too. The main intended use case is to help diagnose problems in complex,
 often massively parallel, builds.
 
+		MDSH and .ONESHELL:
+
+Using mdsh in a makefile that employs .ONESHELL: can be tricky. See
+
+https://www.gnu.org/software/make/manual/make.html#:~:text=If%20.ONESHELL%20is%20provided
+
+for the full explanation, but the short version is that make doesn't
+recognize "mdsh" as being the name of a POSIX-conformant shell. The only
+reasonable workaround is to symlink it to a name that _is_ recognized as
+a POSIX shell. Probably "rksh -> mdsh" is the best choice since almost
+no one uses it as a real shell.
+
 		NFS Cache Flushing
 
 Perhaps stretching the definition of "diagnosis" a bit, mdsh can also
 trigger NFS cache flushing behavior. This can help make distributed
-parallel builds more robust. See help message for details.
+parallel builds more robust. See the --HELP message for details.
 
 Running "make test" will exercise a few mdsh features and thus serve
 as a demo as well.
