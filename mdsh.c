@@ -199,6 +199,8 @@ Real-life usage via make:\n\n\
 $ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=mdsh\n\
 \n\
 $ make SHELL=mdsh MDSH_DBGSH=1\n\
+\n\
+$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=rksh ...\n\
 ");
 
     exit(rc);
@@ -743,8 +745,8 @@ main(int argc, char *argv[])
             FILE *fp;
 
             insist(!getrusage(RUSAGE_CHILDREN, &summary), "getrusage(RUSAGE_CHILDREN, &summary)");
-            if (asprintf(&db_file, "%s/%s.%ld.%ld.csv",
-                    db_dir, prog, starttime.tv_sec, starttime.tv_nsec) == -1) {
+            if (asprintf(&db_file, "%s/%ld.%ld.csv",
+                    db_dir, starttime.tv_sec, starttime.tv_nsec) == -1) {
                 error("asprintf()", strerror(errno));
             }
             insist((fp = fopen(db_file, "w")) != NULL, "fopen()");
