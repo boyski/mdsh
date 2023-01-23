@@ -200,7 +200,7 @@ $ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=mdsh\n\
 \n\
 $ make SHELL=mdsh MDSH_DBGSH=1\n\
 \n\
-$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=rksh ...\n\
+$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=mdsh ...\n\
 ");
 
     exit(rc);
