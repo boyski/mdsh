@@ -121,7 +121,7 @@ with its run time.\n", EV_TIMING, EV_XTRACE);
 %s: if present, points to a writable directory. Each\n\
 command will drop a file into that directory, named by its\n\
 start time in nanoseconds, summarizing it in .csv format:\n\
-[pid,ppid,retcode,run time,user cpu time,sys cpu time,cmd]\n",
+[pid,ppid,retcode,run time,user cpu time,sys cpu time,$(MAKELEVEL),cwd,cmd]\n",
 EV_DB);
 
     fprintf(f, "\n\
@@ -200,7 +200,7 @@ $ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=mdsh\n\
 \n\
 $ make SHELL=mdsh MDSH_DBGSH=1\n\
 \n\
-$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=mdsh ...\n\
+$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=mdsh\n\
 ");
 
     exit(rc);
@@ -741,24 +741,28 @@ main(int argc, char *argv[])
 
         if (db_dir) {
             struct rusage summary;
-            char *db_file;
+            char *db_file, *cwd, *makelevel;
             FILE *fp;
 
+            insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
             insist(!getrusage(RUSAGE_CHILDREN, &summary), "getrusage(RUSAGE_CHILDREN, &summary)");
-            if (asprintf(&db_file, "%s/%ld.%ld.csv",
-                    db_dir, starttime.tv_sec, starttime.tv_nsec) == -1) {
+            if (asprintf(&db_file, "%s/%ld.%ld.%d.csv",
+                    db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
                 error("asprintf()", strerror(errno));
             }
-            insist((fp = fopen(db_file, "w")) != NULL, "fopen()");
+            makelevel = getenv("MAKELEVEL");
+            insist((fp = fopen(db_file, "w")) != NULL, "fopen(db_file)");
             // Note that the pid of *this* process is not shown.
             // The "pid" is our child (shell) and the ppid is our parent.
-            insist(fprintf(fp, "%d,%d,%d,%f,%ld.%ld,%ld.%ld,%s\n",
+            insist(fprintf(fp, "%d,%d,%d,%f,%ld.%ld,%ld.%ld,%s,%s,%s\n",
                         pid, getppid(), rc, elapsed_nsec / NSECS,
                         summary.ru_utime.tv_sec, summary.ru_utime.tv_usec,
                         summary.ru_stime.tv_sec, summary.ru_stime.tv_usec,
-                        argv[argc - 1]) > 0, "fprintf()");
+                        makelevel ? makelevel : "-", cwd,
+                        argv[argc - 1]) > 0, "fprintf(db_file)");
             (void)fclose(fp);
             free(db_file);
+            free(cwd);
         }
     }
 
