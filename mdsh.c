@@ -602,7 +602,8 @@ int
 main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
-    char *db_dir, *watch, *pattern;
+    char *watch, *pattern;
+    FILE *db_fp = NULL;
     struct timespec starttime, endtime;
     pid_t pid;
 
@@ -621,6 +622,9 @@ main(int argc, char *argv[])
     if (!(shell = getenv(EV_SHELL))) {
         shell = "/bin/sh";
     }
+
+    insist(!clock_gettime(CLOCK_REALTIME, &starttime),
+            "clock_gettime(CLOCK_REALTIME, &starttime)");
 
     if (ev2int(EV_XTRACE)) {
         xtrace(argc, argv, NULL, NULL);
@@ -704,17 +708,23 @@ main(int argc, char *argv[])
         insist(!fflush(stderr), "fflush(stderr)");
     }
 
-    db_dir = getenv(EV_DB);
-    if (ev2int(EV_TIMING) || db_dir) {
-        insist(!clock_gettime(CLOCK_REALTIME, &starttime), "clock_gettime(CLOCK_REALTIME, &starttime)");
-    }
-
     // Fork, exec, and wait for the shell.
     {
         int status = EXIT_SUCCESS;
 
         insist((pid = fork()) >= 0, "fork()");
-        if (!pid) {  // In the child.
+        if (pid) {  // In the parent.
+            char *db_dir, *db_file;
+
+            if ((db_dir = getenv(EV_DB))) {
+                if (asprintf(&db_file, "%s/%ld.%ld.%d.csv",
+                        db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
+                    error("asprintf()", strerror(errno));
+                }
+                insist((db_fp = fopen(db_file, "w")) != NULL, "fopen(db_file)");
+                free(db_file);
+            }
+        } else {    // In the child.
             argv[0] = shell;
             insist(execvp(basename(shell), argv) != -1, "execvp()");
         }
@@ -725,7 +735,7 @@ main(int argc, char *argv[])
     // Optionally flush after the recipe.
     (void)nfs_flush(EV_POST_FLUSH_PATHS);
 
-    if (db_dir || ev2int(EV_TIMING)) {
+    if (db_fp || ev2int(EV_TIMING)) {
         char tbuf[256];
         double elapsed_nsec;
 
@@ -739,29 +749,22 @@ main(int argc, char *argv[])
             xtrace(argc, argv, "- ", tbuf);
         }
 
-        if (db_dir) {
+        if (db_fp) {
             struct rusage summary;
-            char *db_file, *cwd, *makelevel;
-            FILE *fp;
+            char *cwd, *makelevel;
 
             insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
             insist(!getrusage(RUSAGE_CHILDREN, &summary), "getrusage(RUSAGE_CHILDREN, &summary)");
-            if (asprintf(&db_file, "%s/%ld.%ld.%d.csv",
-                    db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
-                error("asprintf()", strerror(errno));
-            }
             makelevel = getenv("MAKELEVEL");
-            insist((fp = fopen(db_file, "w")) != NULL, "fopen(db_file)");
             // Note that the pid of *this* process is not shown.
             // The "pid" is our child (shell) and the ppid is our parent.
-            insist(fprintf(fp, "%d,%d,%d,%f,%ld.%ld,%ld.%ld,%s,%s,%s\n",
+            insist(fprintf(db_fp, "%d,%d,%d,%f,%ld.%ld,%ld.%ld,%s,%s,%s\n",
                         pid, getppid(), rc, elapsed_nsec / NSECS,
                         summary.ru_utime.tv_sec, summary.ru_utime.tv_usec,
                         summary.ru_stime.tv_sec, summary.ru_stime.tv_usec,
                         makelevel ? makelevel : "-", cwd,
                         argv[argc - 1]) > 0, "fprintf(db_file)");
-            (void)fclose(fp);
-            free(db_file);
+            (void)fclose(db_fp);
             free(cwd);
         }
     }
