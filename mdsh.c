@@ -727,7 +727,7 @@ main(int argc, char *argv[])
             char *db_dir, *db_file;
 
             if ((db_dir = getenv(EV_DB))) {
-                if (asprintf(&db_file, "%s/%ld.%ld.%d.csv",
+                if (asprintf(&db_file, "%s/%ld.%09ld.%05d.csv",
                         db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
                     error("asprintf()", strerror(errno));
                 }
