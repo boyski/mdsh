@@ -94,51 +94,57 @@ variables below may help diagnose complex make problems.\n",
 
     fprintf(f, "\nENVIRONMENT VARIABLES:\n");
 
-    fprintf(f, "\n%s: override the default shell [/bin/sh].\n", EV_SHELL);
+    fprintf(f, "\n%s: override the default shell [/bin/sh] invoked by %s.\n",
+        EV_SHELL, prog);
 
     fprintf(f, "\n\
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
 any of their states (created, removed, written, or accessed/read).\n",
-EV_PATHS);
+        EV_PATHS);
 
     fprintf(f, "\n\
 %s: if set (nonzero), the command line will be printed\n\
-along with each %s change message.\n", EV_VERBOSE, EV_PATHS);
+along with each %s change message.\n",
+        EV_VERBOSE, EV_PATHS);
 
     fprintf(f, "\n\
 %s: if set, the current working directory will be printed\n\
-before each shell command.\n", EV_PWD);
+before each shell command.\n",
+        EV_PWD);
 
     fprintf(f, "\n\
-%s: if set, the shell command will be printed a la set -x.\n", EV_XTRACE);
+%s: if set, the shell command will be printed a la set -x.\n",
+        EV_XTRACE);
 
     fprintf(f, "\n\
 %s: similar to %s but the command is printed along\n\
-with its run time.\n", EV_TIMING, EV_XTRACE);
+with its run time.\n",
+        EV_TIMING, EV_XTRACE);
 
     fprintf(f, "\n\
 %s: if present, points to a writable directory. Each\n\
 command will drop a file into that directory, named by its\n\
 start time in nanoseconds, summarizing it in .csv format:\n\
 [pid,ppid,retcode,run time,user cpu time,sys cpu time,$(MAKELEVEL),cwd,cmd]\n",
-EV_DB);
+        EV_DB);
 
     fprintf(f, "\n\
 %s: if a regular expression is supplied here it will be\n\
 compared against the shell command. If a match is found an\n\
-interactive debug shell will be invoked before the command runs.\n", EV_CMDRE);
+interactive debug shell will be invoked before the command runs.\n",
+        EV_CMDRE);
 
     fprintf(f, "\n\
 %s: if the underlying shell process exits with a failure status\n\
 and this is set, %s will run an interactive shell to help analyze\n\
 the failing state.\n",
-    EV_DBGSH, prog);
+        EV_DBGSH, prog);
 
     fprintf(f, "\n\
-However, be aware that starting an interactive debug shell can\n\
-run into trouble in -j mode which sometimes closes stdin. Such a\n\
-shell requires stdin and stdout to be available to the terminal.\n");
+However, be aware that starting an interactive shell can run into\n\
+trouble in -j mode which generally closes stdin. Interactive shells\n\
+require stdin and stdout to be available to the terminal.\n");
 
     if (helplevel > 1) {
 
@@ -159,8 +165,8 @@ shell requires stdin and stdout to be available to the terminal.\n");
 
         fprintf(f, "\n\
     NFS cache flushing is a very complex topic and the situation varies by\n\
-    protocol (NFSvX), NFS server vendor, etc. Multiple flushing\n\
-    techniques are supported and both 'pull' (flush before reading) and 'push'\n\
+    protocol (NFSvX), NFS server vendor, etc. Multiple flushing techniques\n\
+    are supported and both 'pull' (flush before reading) and 'push'\n\
     (flush after writing) models are supported to allow experimental tuning.\n");
 
         fprintf(f, "\n\
@@ -169,39 +175,43 @@ shell requires stdin and stdout to be available to the terminal.\n");
     setting %s=$(@D), for instance. Or $^ could be flushed.\n\
     Generally we think pull is more correct than push but having a compile\n\
     recipe, say, use %s=$@ to push-flush the .o may be\n\
-    worth experimenting with too.\n", EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
+    worth experimenting with too.\n",
+        EV_PRE_FLUSH_PATHS, EV_POST_FLUSH_PATHS);
     }
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
-$ MDSH_PATHS=foo:bar mdsh -c 'touch foo'\n\
-mdsh: ==-== CREATED: foo\n\
+$ MDSH_PATHS=foo:bar %s -c 'touch foo'\n\
+%s: ==-== CREATED: foo\n\
 \n\
-$ MDSH_PATHS=foo:bar mdsh -c 'touch foo bar'\n\
-mdsh: ==-== MODIFIED: foo\n\
-mdsh: ==-== CREATED: bar\n\
+$ MDSH_PATHS=foo:bar %s -c 'touch foo bar'\n\
+%s: ==-== MODIFIED: foo\n\
+%s: ==-== CREATED: bar\n\
 \n\
-$ MDSH_PATHS=foo:bar mdsh -c 'grep blah foo bar'\n\
-mdsh: ==-== ACCESSED: foo\n\
-mdsh: ==-== ACCESSED: bar\n\
+$ MDSH_PATHS=foo:bar %s -c 'grep blah foo bar'\n\
+%s: ==-== ACCESSED: foo\n\
+%s: ==-== ACCESSED: bar\n\
 \n\
-$ MDSH_PATHS=foo:bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
-mdsh: ==-== REMOVED: foo [/bin/sh -c rm -f foo bar]\n\
-mdsh: ==-== REMOVED: bar [/bin/sh -c rm -f foo bar]\n\
+$ MDSH_PATHS=foo:bar MDSH_VERBOSE=1 %s -c 'rm -f foo bar'\n\
+%s: ==-== REMOVED: foo [/bin/sh -c rm -f foo bar]\n\
+%s: ==-== REMOVED: bar [/bin/sh -c rm -f foo bar]\n\
 \n\
-$ MDSH_PATHS=foo:bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
+$ [repeat previous command]\n\
 (no state change messages, the files are already gone)\n\
 \n\
-$ MDSH_TIMING=1 mdsh -c 'sleep 2.4'\n\
-- mdsh -c sleep 2.4 (2.4s)\n\
+$ MDSH_TIMING=1 %s -c 'sleep 2.4'\n\
+- %s -c sleep 2.4 (2.4s)\n\
 \n\
 Real-life usage via make:\n\n\
-$ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=mdsh\n\
+$ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=%s\n\
 \n\
-$ make SHELL=mdsh MDSH_DBGSH=1\n\
+$ make SHELL=%s MDSH_DBGSH=1\n\
 \n\
-$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=mdsh\n\
-");
+$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=%s\n\
+",\
+        prog, prog, prog, prog, prog, prog,
+        prog, prog, prog, prog, prog, prog,
+        prog, prog, prog, prog);
 
     exit(rc);
 }
