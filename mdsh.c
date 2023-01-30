@@ -123,10 +123,10 @@ with its run time.\n",
         EV_TIMING, EV_XTRACE);
 
     fprintf(f, "\n\
-%s: if present, points to a writable directory. Each\n\
-command will drop a file into that directory, named by its\n\
-start time in nanoseconds, summarizing it in .csv format:\n\
-[pid,ppid,retcode,run time,user cpu time,sys cpu time,$(MAKELEVEL),cwd,cmd]\n",
+%s: if present, points to a writable directory. Each shell command\n\
+will drop a file into that directory, named by its start time in\n\
+nanoseconds, summarizing the command in .csv format:\n\
+[pid,ppid,retcode,run time,user time,sys time,$(MAKELEVEL),pwd,cmd]\n",
         EV_DB);
 
     fprintf(f, "\n\

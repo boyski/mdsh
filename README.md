@@ -39,13 +39,16 @@ for the full explanation, but the short version is that make doesn't
 recognize "mdsh" as being the name of a POSIX-conformant shell. The only
 reasonable workaround is to symlink it to a name that _is_ recognized as
 a POSIX shell. Probably "rksh -> mdsh" is the best choice since almost
-no one uses it as a real shell.
+no one uses rksh as a real shell.
 
 		NFS Cache Flushing
 
 Perhaps stretching the definition of "diagnosis" a bit, mdsh can also
-trigger NFS cache flushing behavior. This can help make distributed
-parallel builds more robust. See the --HELP message for details.
+trigger NFS cache flushing behavior. This may be useful in making
+distributed parallel builds more robust, but it's experimental. See
+the --HELP (uppercase) message for details.
+
+		Testing
 
 Running "make test" will exercise a few mdsh features and thus serve
 as a demo as well.
