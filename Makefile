@@ -3,14 +3,17 @@ export LC_ALL := C
 
 TARGETS := mdsh
 
+# Meaningless as is, but may be activated by being exported in "test".
+MDSH_DB := $(CURDIR)/mdsh_db
+
 .PHONY: all
 all: $(TARGETS)
 
 %: %.c
 	$(CC) -g -o $@ -Wall -Wextra $<
 
-# Consider passing MDSH_HTTP_SERVER=<server> to make for this test
-# to exercise HTTP cache flushing. The web server would need read
+# Consider passing MDSH_HTTP_SERVER=<server> for this test to
+# exercise HTTP cache flushing. The web server would need read
 # access to files in local NFS.
 .PHONY: test
 test: export MDSH_PATHS=foo*:bar
@@ -31,14 +34,28 @@ test: mdsh
 	# Test $< timing ...
 	MDSH_TIMING=1 MDSH_XTRACE=1 ./$< -c 'uname; sleep 2'
 
+	# Test MDSH_DB ...
+	$(RM) -r $(MDSH_DB) && \
+	  mkdir $(MDSH_DB) && \
+	  MDSH_DB=$(MDSH_DB) \
+	    $(MAKE) --no-print-directory _dbtest SHELL=$<
+	head $(MDSH_DB)/*
+
+.PHONY: _dbtest
+_dbtest:
+	sleep 1
+	uname -a
+	sleep 2
+	date
+
 .PHONY: install
 install: mdsh := $(shell bash -c "type -fp mdsh")
 install: all
 	$(if $(mdsh),cp -a mdsh $(mdsh))
 
 .PHONY: clean
-clean: cleanups := $(wildcard *.o $(TARGETS))
+clean: cleanups := $(wildcard *.o $(TARGETS) $(MDSH_DB))
 clean:
-	$(if $(cleanups),$(RM) $(cleanups))
+	$(if $(cleanups),$(RM) -r $(cleanups))
 
 # vim: filetype=make shiftwidth=2 tw=80 cc=+1 noet
