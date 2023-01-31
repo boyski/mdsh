@@ -74,26 +74,26 @@ static int verbose;
         (left.tv_sec == right.tv_sec && left.tv_nsec > right.tv_nsec))
 
 // Get first argument of __VA_ARGS__ if any.
-#define INSIST_FIRST_ARG(...) INSIST_FIRST_HELPER(__VA_ARGS__, throwaway)
-#define INSIST_FIRST_HELPER(first, ...) "" #first
+#define _INSIST_FIRST_ARG(...) _INSIST_FIRST_HELPER(__VA_ARGS__, throwaway)
+#define _INSIST_FIRST_HELPER(first, ...) "" #first
 
 // Print caller function name, file name, line_number, error message
 // and optional supporting arguments. Exit with failure code.
 // Supporting arguments are a printf() format string followed
 // by respective printf() arguments.
-#define INSIST_DIE(err_msg, ...) if (1) { \
+#define _INSIST_DIE(err_msg, ...) if (1) { \
 	fprintf(stderr, "%s: Error: %s() %s:%d %s", \
 	prog, __FUNCTION__, __FILE__, __LINE__, err_msg); \
 	if (errno) fprintf(stderr, " %s", strerror(errno)); \
-	if (strcmp(INSIST_FIRST_ARG(__VA_ARGS__), "")) \
+	if (strcmp(_INSIST_FIRST_ARG(__VA_ARGS__), "")) \
 		fprintf(stderr, ": " __VA_ARGS__); \
 	fputc('\n', stderr); \
 	exit(EXIT_FAILURE); \
 }
 
-// Check the condition to be true, otherwise call INSIST_DIE above with
+// Check the condition to be true, otherwise call _INSIST_DIE above with
 // condition as string and optional supporting arguments.
-#define INSIST(cond, ...) if (!(cond)) {INSIST_DIE(#cond, ##__VA_ARGS__);}
+#define INSIST(cond, ...) if (!(cond)) {_INSIST_DIE(#cond, ##__VA_ARGS__);}
 
 static void
 usage(int rc, int helplevel)
