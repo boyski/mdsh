@@ -20,21 +20,21 @@ test: export MDSH_PATHS=foo*:bar
 test: mdsh
 	@$(RM) foo* bar
 
-	# Test $< path tracking ...
+	############ Testing $< path tracking ... ############
 	./$< -c 'uname > foo'
 	./$< -c 'touch foo foobar'
 	./$< -c 'uname > foo; uname > bar'
 	./$< -c 'grep -c . foo bar > /dev/null'
 	./$< -c '$(RM) foo* bar'
 
-	# Test $< NFS flushing ...
+	############ Testing $< NFS flushing ... ############
 	$(strip MDSH_VERBOSE=1 MDSH_PRE_FLUSH_PATHS=. \
 	  ./$< -c date)
 
-	# Test $< timing ...
+	############ Testing $< timing ... ############
 	MDSH_TIMING=1 MDSH_XTRACE=1 ./$< -c 'uname; sleep 2'
 
-	# Test MDSH_DB ...
+	############ Testing MDSH_DB ... ############
 	$(RM) -r $(MDSH_DB) && \
 	  mkdir $(MDSH_DB) && \
 	  MDSH_DB=$(MDSH_DB) \
@@ -43,7 +43,6 @@ test: mdsh
 
 .PHONY: _dbtest
 _dbtest:
-	sleep 1
 	uname -a
 	sleep 2
 	date
