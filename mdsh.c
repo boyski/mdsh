@@ -68,10 +68,32 @@ static int verbose;
 #define SEP ":"
 
 // Nanoseconds per second.
-#define NSECS 1000000000.0
+#define NSECS_PER_SEC 1000000000.0
 
 #define TIME_GT(left, right) ((left.tv_sec > right.tv_sec) || \
         (left.tv_sec == right.tv_sec && left.tv_nsec > right.tv_nsec))
+
+// Get first argument of __VA_ARGS__ if any.
+#define INSIST_FIRST_ARG(...) INSIST_FIRST_HELPER(__VA_ARGS__, throwaway)
+#define INSIST_FIRST_HELPER(first, ...) "" #first
+
+// Print caller function name, file name, line_number, error message
+// and optional supporting arguments. Exit with failure code.
+// Supporting arguments are a printf() format string followed
+// by respective printf() arguments.
+#define INSIST_DIE(err_msg, ...) if (1) { \
+	fprintf(stderr, "%s: Error: %s() %s:%d %s", \
+	prog, __FUNCTION__, __FILE__, __LINE__, err_msg); \
+	if (errno) fprintf(stderr, " %s", strerror(errno)); \
+	if (strcmp(INSIST_FIRST_ARG(__VA_ARGS__), "")) \
+		fprintf(stderr, ": " __VA_ARGS__); \
+	fputc('\n', stderr); \
+	exit(EXIT_FAILURE); \
+}
+
+// Check the condition to be true, otherwise call INSIST_DIE above with
+// condition as string and optional supporting arguments.
+#define INSIST(cond, ...) if (!(cond)) {INSIST_DIE(#cond, ##__VA_ARGS__);}
 
 static void
 usage(int rc, int helplevel)
@@ -235,15 +257,6 @@ error(const char *term, const char *msg)
     }
 }
 
-static void
-insist(int success, const char *term)
-{
-    if (!success) {
-        error(term, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-}
-
 static int
 pathcmp(const void *pa, const void *pb)
 {
@@ -265,7 +278,7 @@ report(const char *path, const char *change)
         char *cwd;
         int i;
 
-        insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
+	INSIST((cwd = getcwd(NULL, 0)) != NULL);
         fprintf(stderr, " [%s] (%s ", cwd, shell);
         free(cwd);
         for (i = 1; argv_[i]; i++) {
@@ -282,7 +295,7 @@ report(const char *path, const char *change)
     }
 
     fputc('\n', stderr);
-    insist(!fflush(stderr), "fflush(stderr)");
+    INSIST(!fflush(stderr));
 }
 
 static void
@@ -324,7 +337,8 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
             }
             break;
         default:
-            insist(0, pt->path);
+            perror(pt->path);
+            exit(1);
     }
 
     globfree(&refound);
@@ -338,7 +352,7 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
     if (getenv(EV_XTEVS)) {
         char *evlist, *ev;
 
-        insist((evlist = strdup(getenv(EV_XTEVS))) != NULL, "strdup()");
+        INSIST((evlist = strdup(getenv(EV_XTEVS))) != NULL);
         for (ev = strtok(evlist, SEP); ev; ev = strtok(NULL, SEP)) {
             if (getenv(ev)) {
                 fprintf(stderr, "+++ %s=%s\n", ev, getenv(ev));
@@ -365,7 +379,7 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
         fprintf(stderr, " (%s)", timing);
     }
     fputc('\n', stderr);
-    insist(!fflush(stderr), "fflush(stderr)");
+    INSIST(!fflush(stderr));
 }
 
 static void
@@ -377,7 +391,7 @@ dbgsh(int argc, char *argv[])
         pid_t pid;
 
         xtrace(argc, argv, NULL, NULL);
-        insist((pid = fork()) >= 0, "fork()");
+        INSIST((pid = fork()) >= 0);
         if (!pid) {  // In the child.
             int fd;
             // GNU make with -j tends to close stdin, and stdout/stderr might
@@ -385,16 +399,15 @@ dbgsh(int argc, char *argv[])
             for (fd = 0; fd < 3; fd++) {
                 if (!isatty(fd)) {
                     (void)close(fd);
-                    insist(open("/dev/tty", fd ? O_WRONLY : O_RDONLY) == 0,
-                           "open(/dev/tty)");
+                    INSIST(open("/dev/tty", fd ? O_WRONLY : O_RDONLY) == 0);
                 }
             }
-            insist(!setenv("PS1", EV_PS1, 1), NULL);
+            INSIST(!setenv("PS1", EV_PS1, 1));
             (void)execlp(basename(shell), shell, "--norc", "-i", (char *)NULL);
             error(shell, strerror(errno)); // NOTREACHED
         }
         // Ignore the exit status of this debugging shell.
-        insist(wait(NULL) != -1, "wait()");
+        INSIST(wait(NULL) != -1);
     }
 }
 
@@ -568,7 +581,7 @@ nfs_flush(const char *ev)
 
         http_server = getenv(EV_HTTP_SERVER);
 
-        insist((paths = strdup(paths)) != NULL, "strdup(paths)");
+        INSIST((paths = strdup(paths)) != NULL);
         for (path = strtok(paths, SEP); path; path = strtok(NULL, SEP)) {
             DIR *odir;
 
@@ -633,8 +646,7 @@ main(int argc, char *argv[])
         shell = "/bin/sh";
     }
 
-    insist(!clock_gettime(CLOCK_REALTIME, &starttime),
-            "clock_gettime(CLOCK_REALTIME, &starttime)");
+    INSIST(!clock_gettime(CLOCK_REALTIME, &starttime));
 
     if (ev2int(EV_XTRACE)) {
         xtrace(argc, argv, NULL, NULL);
@@ -651,14 +663,14 @@ main(int argc, char *argv[])
 
         // Run through the patterns, deriving a list of matched paths.
         (void)memset(&found, 0, sizeof(found));
-        insist((watch = strdup(watch)) != NULL, "strdup(watch)");
+        INSIST((watch = strdup(watch)) != NULL);
         for (pattern = strtok(watch, SEP); pattern; pattern = strtok(NULL, SEP)) {
             switch (glob(pattern, globflags, NULL, &found)) {
                 case 0:
                 case GLOB_NOMATCH:
                     break;
                 default:
-                    insist(0, pattern);
+                    perror(pattern);
                     break;
             }
             globflags |= GLOB_APPEND;
@@ -668,7 +680,7 @@ main(int argc, char *argv[])
             pathtimes_s *pt;
             struct stat stbuf;
 
-            insist((pt = calloc(sizeof(pathtimes_s), 1)) != NULL, "calloc(pathtimes_s)");
+            INSIST((pt = calloc(sizeof(pathtimes_s), 1)) != NULL);
             pt->path = strdup(found.gl_pathv[i]);
             if (stat(pt->path, &stbuf) != -1) {
                 pt->times[0].tv_sec = stbuf.st_atim.tv_sec;
@@ -686,7 +698,7 @@ main(int argc, char *argv[])
             } else {
                 (void)memset(&stbuf, '\0', sizeof(stbuf));
             }
-            insist(tsearch((const void *)pt, &stash, pathcmp) != NULL, "tsearch(&pre)");
+            INSIST(tsearch((const void *)pt, &stash, pathcmp) != NULL);
         }
 
         globfree(&found);
@@ -697,7 +709,7 @@ main(int argc, char *argv[])
         size_t i;
         regex_t re;
 
-        insist(regcomp(&re, getenv(EV_CMDRE), REG_EXTENDED) == 0, "regcomp()");
+        INSIST(regcomp(&re, getenv(EV_CMDRE), REG_EXTENDED) == 0);
         for (i = 1; argv[i]; i++) {
             if (argv[i - 1][0] == '-' && strchr(argv[i - 1], 'c')) {
                 if (!regexec(&re, argv[i], 0, NULL, 0)) {
@@ -712,17 +724,17 @@ main(int argc, char *argv[])
     if (ev2int(EV_PWD)) {
         char *cwd;
 
-        insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
+        INSIST((cwd = getcwd(NULL, 0)) != NULL);
         fprintf(stderr, "[%s] ", cwd);
         free(cwd);
-        insist(!fflush(stderr), "fflush(stderr)");
+        INSIST(!fflush(stderr));
     }
 
     // Fork, exec, and wait for the shell.
     {
         int status = EXIT_SUCCESS;
 
-        insist((pid = fork()) >= 0, "fork()");
+        INSIST((pid = fork()) >= 0);
         if (pid) {  // In the parent.
             char *db_dir, *db_file;
 
@@ -731,14 +743,14 @@ main(int argc, char *argv[])
                         db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
                     error("asprintf()", strerror(errno));
                 }
-                insist((db_fp = fopen(db_file, "w")) != NULL, "fopen(db_file)");
+                INSIST((db_fp = fopen(db_file, "w")) != NULL);
                 free(db_file);
             }
         } else {    // In the child.
             argv[0] = shell;
-            insist(execvp(basename(shell), argv) != -1, "execvp()");
+            INSIST(execvp(basename(shell), argv) != -1);
         }
-        insist(wait(&status) != -1, "wait()");
+        INSIST(wait(&status) != -1);
         rc = WEXITSTATUS(status);
     }
 
@@ -749,11 +761,11 @@ main(int argc, char *argv[])
         char tbuf[256];
         double elapsed_nsec;
 
-        insist(!clock_gettime(CLOCK_REALTIME, &endtime), "clock_gettime(CLOCK_REALTIME, &endtime)");
+        INSIST(!clock_gettime(CLOCK_REALTIME, &endtime));
         elapsed_nsec =
-            ((endtime.tv_sec * NSECS) + endtime.tv_nsec) -
-            ((starttime.tv_sec * NSECS) + starttime.tv_nsec);
-        (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", elapsed_nsec / NSECS);
+            ((endtime.tv_sec * NSECS_PER_SEC) + endtime.tv_nsec) -
+            ((starttime.tv_sec * NSECS_PER_SEC) + starttime.tv_nsec);
+        (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", elapsed_nsec / NSECS_PER_SEC);
 
         if (ev2int(EV_TIMING)) {
             xtrace(argc, argv, "- ", tbuf);
@@ -763,17 +775,17 @@ main(int argc, char *argv[])
             struct rusage summary;
             char *cwd, *makelevel;
 
-            insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
-            insist(!getrusage(RUSAGE_CHILDREN, &summary), "getrusage(RUSAGE_CHILDREN, &summary)");
+            INSIST((cwd = getcwd(NULL, 0)) != NULL);
+            INSIST(!getrusage(RUSAGE_CHILDREN, &summary));
             makelevel = getenv("MAKELEVEL");
             // Note that the pid of *this* process is not shown.
             // The "pid" is our child (shell) and the ppid is our parent.
-            insist(fprintf(db_fp, "%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n",
-                        pid, getppid(), rc, elapsed_nsec / NSECS,
+            INSIST(fprintf(db_fp, "%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n",
+                        pid, getppid(), rc, elapsed_nsec / NSECS_PER_SEC,
                         summary.ru_utime.tv_sec, summary.ru_utime.tv_usec,
                         summary.ru_stime.tv_sec, summary.ru_stime.tv_usec,
                         makelevel ? makelevel : "-", cwd,
-                        argv[argc - 1]) > 0, "fprintf(db_file)");
+                        argv[argc - 1]) > 0);
             (void)fclose(db_fp);
             free(cwd);
         }
