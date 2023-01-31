@@ -768,7 +768,7 @@ main(int argc, char *argv[])
             makelevel = getenv("MAKELEVEL");
             // Note that the pid of *this* process is not shown.
             // The "pid" is our child (shell) and the ppid is our parent.
-            insist(fprintf(db_fp, "%d,%d,%d,%f,%ld.%ld,%ld.%ld,%s,%s,%s\n",
+            insist(fprintf(db_fp, "%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n",
                         pid, getppid(), rc, elapsed_nsec / NSECS,
                         summary.ru_utime.tv_sec, summary.ru_utime.tv_usec,
                         summary.ru_stime.tv_sec, summary.ru_stime.tv_usec,
