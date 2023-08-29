@@ -38,11 +38,11 @@ test: mdsh
 	$(RM) -r $(MDSH_DB) && \
 	  mkdir $(MDSH_DB) && \
 	  MDSH_DB=$(MDSH_DB) \
-	    $(MAKE) --no-print-directory _dbtest SHELL=$<
+	    $(MAKE) --no-print-directory SHELL=$< dbtest
 	head $(MDSH_DB)/*
 
-.PHONY: _dbtest
-_dbtest:
+.PHONY: dbtest
+dbtest:
 	uname -a
 	sleep 2
 	date
