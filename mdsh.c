@@ -122,7 +122,8 @@ variables below may help diagnose complex make problems.\n",
     fprintf(f, "\n\
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
-any of their states (created, removed, written, or accessed/read).\n",
+any of their states (created, removed, written, or accessed/read).\n\
+This feature depends on Linux 'inotify' kernel extensions.\n",
         EV_PATHS);
 
     fprintf(f, "\n\
