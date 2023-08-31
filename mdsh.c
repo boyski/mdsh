@@ -45,6 +45,7 @@ static char **argv_;
 static char prog[PATH_MAX] = "??";
 static char *shell;
 static void *stash;
+static int fixup = 1;
 static int verbose;
 
 #define PFX "MDSH"
@@ -58,13 +59,15 @@ static int verbose;
 #define EV_HTTP_SERVER PFX "_HTTP_SERVER"
 #define EV_XTEVS PFX "_XTEVS"
 #define EV_PATHS PFX "_PATHS"
+#define EV_MARKER PFX "_MARKER"
+#define EV_NOFIXUP PFX "_NOFIXUP"
 #define EV_PWD PFX "_PWD"
 #define EV_SHELL PFX "_SHELL"
 #define EV_TIMING PFX "_TIMING"
 #define EV_VERBOSE PFX "_VERBOSE"
 #define EV_XTRACE PFX "_XTRACE"
 
-#define MARK "==-=="
+#define DEFAULT_MARKER "==-=="
 #define SEP ":"
 
 // Nanoseconds per second.
@@ -82,18 +85,20 @@ static int verbose;
 // Supporting arguments are a printf() format string followed
 // by respective printf() arguments.
 #define _INSIST_DIE(err_msg, ...) if (1) { \
-	fprintf(stderr, "%s: Error: %s() %s:%d %s", \
-	prog, __FUNCTION__, __FILE__, __LINE__, err_msg); \
-	if (errno) fprintf(stderr, " %s", strerror(errno)); \
-	if (strcmp(_INSIST_FIRST_ARG(__VA_ARGS__), "")) \
-		fprintf(stderr, ": " __VA_ARGS__); \
-	fputc('\n', stderr); \
-	exit(EXIT_FAILURE); \
+        fprintf(stderr, "%s: Error: %s() %s:%d %s", \
+        prog, __FUNCTION__, __FILE__, __LINE__, err_msg); \
+        if (errno) fprintf(stderr, " %s", strerror(errno)); \
+        if (strcmp(_INSIST_FIRST_ARG(__VA_ARGS__), "")) \
+                fprintf(stderr, ": " __VA_ARGS__); \
+        fputc('\n', stderr); \
+        exit(EXIT_FAILURE); \
 }
 
 // Check the condition to be true, otherwise call _INSIST_DIE above with
 // condition as string and optional supporting arguments.
 #define INSIST(cond, ...) if (!(cond)) {_INSIST_DIE(#cond, ##__VA_ARGS__);}
+
+#define LASTCHAR(str) (strrchr(str, '\0') - 1)
 
 static void
 usage(int rc, int helplevel)
@@ -132,6 +137,15 @@ along with each %s change message.\n",
         EV_VERBOSE, EV_PATHS);
 
     fprintf(f, "\n\
+%s: optional string added to verbosity to aid later grepping.\n",
+        EV_MARKER);
+
+    fprintf(f, "\n\
+%s: if set, printed command lines will not have whitespace\n\
+cleaned up.\n",
+        EV_NOFIXUP);
+
+    fprintf(f, "\n\
 %s: if set, the current working directory will be printed\n\
 before each shell command.\n",
         EV_PWD);
@@ -168,6 +182,14 @@ the failing state.\n",
 However, be aware that starting an interactive shell can run into\n\
 trouble in -j mode which generally closes stdin. Interactive shells\n\
 require stdin and stdout to be available to the terminal.\n");
+
+    fprintf(f, "\n\
+GNU make maintains a compiled-in list of shells it knows to be\n\
+POSIX-conformant. Unfortunately mdsh isn't known to make by name\n\
+even though it wraps around /bin/sh which really is a POSIX shell.\n\
+This can cause make to get confused, especially in .ONESHELL: mode.\n\
+If this happens the suggested workaround is to use a symlink\n\
+rksh -> mdsh since rksh IS on the list but almost no one uses it.\n");
 
     if (helplevel > 1) {
 
@@ -267,19 +289,21 @@ pathcmp(const void *pa, const void *pb)
 static void
 report(const char *path, const char *change)
 {
+    char *marker = getenv(EV_MARKER);
     char *mlev;
 
+    marker = marker ? marker : DEFAULT_MARKER;
     if (verbose && (mlev = getenv("MAKELEVEL"))) {
-        fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, MARK, change, path);
+        fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, marker, change, path);
     } else {
-        fprintf(stderr, "%s: %s %s: %s", prog, MARK, change, path);
+        fprintf(stderr, "%s: %s %s: %s", prog, marker, change, path);
     }
 
     if (verbose) {
         char *cwd;
         int i;
 
-	INSIST((cwd = getcwd(NULL, 0)) != NULL);
+        INSIST((cwd = getcwd(NULL, 0)) != NULL);
         fprintf(stderr, " [%s] (%s ", cwd, shell);
         free(cwd);
         for (i = 1; argv_[i]; i++) {
@@ -348,6 +372,7 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
 static void
 xtrace(int argc, char *argv[], const char *pfx, const char *timing)
 {
+    char *marker = getenv(EV_MARKER);
     int i;
 
     if (getenv(EV_XTEVS)) {
@@ -363,18 +388,52 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
     }
 
     fputs(pfx ? pfx : "+ ", stderr);
+    if (marker) {
+        fputs(marker, stderr);
+        fputc(' ', stderr);
+    }
     for (i = 0; i < argc; i++) {
+        char *original, *printable;
+        int j;
+
         // The handling of whitespace and quoting here is rudimentary
         // but it's only for visual purposes. No commitment is made
-        // that output can be safely fed back to the shell.
-        if (strchr(argv[i], ' ') || strchr(argv[i], '\t')) {
-            fprintf(stderr, "'%s'", argv[i]);
-        } else {
-            fputs(argv[i], stderr);
+        // that this output can be safely fed back to the shell.
+
+        // Make a copy of the original word to be cleaned up for printing
+        // and remember its location so it can be freed.
+        INSIST((original = printable = strdup(argv[i])) != NULL);
+
+        if (fixup) {
+            // Treat all whitespace the same for printing purposes.
+            for (j = 0; printable[j]; j++) {
+                switch (printable[j]) {
+                    case '\n': case '\t':
+                        printable[j] = ' ';
+                        break;
+                }
+            }
+
+            // Trim whitespace from front and back of each printable word.
+            while (*(LASTCHAR(printable)) == ' ') {
+                *(LASTCHAR(printable)) = '\0';
+            }
+            while (*printable == ' ') {
+                printable++;
+            }
         }
+
+        if (strchr(printable, ' ')) {
+            fprintf(stderr, "'%s'", printable);
+        } else {
+            fputs(printable, stderr);
+        }
+
         if (i < argc - 1) {
             fputc(' ', stderr);
         }
+
+        free(original);
     }
     if (timing) {
         fprintf(stderr, " (%s)", timing);
@@ -632,6 +691,7 @@ main(int argc, char *argv[])
     pid_t pid;
 
     argv_ = argv; // Hack to preserve command line for later verbosity.
+    fixup = ev2int(EV_NOFIXUP) ? 0 : 1;
     verbose = ev2int(EV_VERBOSE); // Global verbosity flag.
 
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
@@ -649,7 +709,7 @@ main(int argc, char *argv[])
 
     INSIST(!clock_gettime(CLOCK_REALTIME, &starttime));
 
-    if (ev2int(EV_XTRACE)) {
+    if (ev2int(EV_XTRACE) && !ev2int(EV_TIMING)) {
         xtrace(argc, argv, NULL, NULL);
     }
 
@@ -769,7 +829,7 @@ main(int argc, char *argv[])
         (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", elapsed_nsec / NSECS_PER_SEC);
 
         if (ev2int(EV_TIMING)) {
-            xtrace(argc, argv, "- ", tbuf);
+            xtrace(argc, argv, "+ ", tbuf);
         }
 
         if (db_fp) {
