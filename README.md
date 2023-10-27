@@ -39,11 +39,12 @@ Using mdsh in a makefile that employs .ONESHELL: can be tricky. See
 
 https://www.gnu.org/software/make/manual/make.html#:~:text=If%20.ONESHELL%20is%20provided
 
-for more, but the short version is that make maintains an internal list
-of POSIX-conformant shells and mdsh isn't on it.  The only reasonable
-workaround is to link it to a name that _is_ recognized as a POSIX
-shell. Probably "rksh -> mdsh" is the best choice since almost no one
-uses rksh as an actual shell.
+for more, but the short version is that make maintains an internal
+list of POSIX-conformant shells and mdsh isn't on it, even though it
+effectively is POSIX since it execs bash. The only reasonable workaround
+is to link it to a name that _is_ recognized as a POSIX shell. Probably
+"rksh -> mdsh" is the best choice since almost no one uses rksh as an
+actual shell. It may be best to always use it as rksh to avoid surprises.
 
 		Creating a .csv summary
 

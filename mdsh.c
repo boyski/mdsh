@@ -155,9 +155,13 @@ before each shell command.\n",
         EV_XTRACE);
 
     fprintf(f, "\n\
-%s: similar to %s but the command is printed along\n\
-with its run time.\n",
-        EV_TIMING, EV_XTRACE);
+%s: similar to %s but the command is printed\n\
+along with its run time. Can be used to profile a build to find\n\
+the longest poles. After running make with this enabled, plus\n\
+-Orecurse for recursive parallel builds, use something like\n\
+'grep %s: sample.log | sort -n -k3,3' to sort recipes\n\
+by run time. Alternatively, timings are also kept by %s.\n",
+        EV_TIMING, EV_XTRACE, EV_TIMING, EV_DB);
 
     fprintf(f, "\n\
 %s: if present, points to a writable directory. Each shell command\n\
@@ -392,6 +396,9 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
         fputs(marker, stderr);
         fputc(' ', stderr);
     }
+    if (timing) {
+        fprintf(stderr, "[%s: %s] ", EV_TIMING, timing);
+    }
     for (i = 0; i < argc; i++) {
         char *original, *printable;
         int j;
@@ -434,9 +441,6 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
         }
 
         free(original);
-    }
-    if (timing) {
-        fprintf(stderr, " (%s)", timing);
     }
     fputc('\n', stderr);
     INSIST(!fflush(stderr));
