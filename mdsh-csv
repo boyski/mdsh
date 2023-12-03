@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+# Copyright (C) 2023 David Boyce
+#
+# This program is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation; either version 3 of the License, or (at your option) any later
+# version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more detail.
+#
+# You may have received a copy of the GNU General Public License along with
+# this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""
+Summarize the longest-running recipes from an MDSH CSV build run.
+
+EXAMPLES:
+
+Show the 10 longest recipes:
+
+    %(prog)s -m10 /tmp/mdsh
+"""
+
+import argparse
+import glob
+import os.path as op
+import sys
+
+
+def main():
+    """Conventional entry point for command line use."""
+    parser = argparse.ArgumentParser(
+        epilog=__doc__.strip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        '-k', '--key', type=int, default=4,
+        help="sort on the specified key [%(default)s]")
+    parser.add_argument(
+        '-m', '--max', type=int, default=0,
+        metavar='N',
+        help="show only the N slowest recipes")
+    parser.add_argument(
+        'path',
+        help="path to dir containing generated MDSH .csv files")
+    opts = parser.parse_args()
+
+    data = []
+
+    if op.isdir(opts.path):
+        paths = glob.glob(op.join(opts.path, '*.csv'))
+    else:
+        paths = [opts.path]
+
+    for path in paths:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                data.append(line.strip().split(','))
+
+    key = opts.key - 1
+    if data[0][key][0].isdigit():
+        data.sort(key=lambda data: float(data[key]), reverse=True)
+    else:
+        data.sort(key=lambda data: data[key], reverse=True)
+
+    for i, datum in enumerate(data):
+        if opts.max and i == opts.max:
+            break
+        cmd = datum[-1].strip().strip(';')
+        print('%-20s %s' % (datum[key] + ':', cmd))
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+
+# Local Variables:
+# mode: Python
+# indent-tabs-mode: nil
+# python-indent: 4
+# fill-column: 79
+# End:
+#
+# vim: sw=4:et:tw=79:cc=+1
