@@ -14,7 +14,11 @@
 # this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Summarize the longest-running recipes from an MDSH CSV build run.
+Summarize the longest-running recipes from an MDSH_DB build with .csv files.
+
+Other people have said they were able to import the .csv data to a
+spreadsheet which may be the simpler and more flexible way to analyze
+it but this little Python script may also be helpful.
 
 EXAMPLES:
 
@@ -35,7 +39,7 @@ def main():
         epilog=__doc__.strip(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        '-k', '--key', type=int, default=4,
+        '-k', '--key', type=int, default=5,
         help="sort on the specified key [%(default)s]")
     parser.add_argument(
         '-m', '--max', type=int, default=0,
@@ -64,11 +68,19 @@ def main():
     else:
         data.sort(key=lambda data: data[key], reverse=True)
 
+    time_zero = min((float(s[0]) for s in data))
+
+    # CSV format is:
+    # started,pid,ppid,status,elapsed,user time,sys time,makelevel,pwd,cmd
+    fmt = '%-10s %-10s %s'
+    print(fmt % ('STARTED', 'ELAPSED', 'RECIPE'))
     for i, datum in enumerate(data):
         if opts.max and i == opts.max:
             break
-        cmd = datum[-1].strip().strip(';')
-        print('%-20s %s' % (datum[key] + ':', cmd))
+        started = str(round(float(datum[0]) - time_zero, 1))
+        elapsed = str(round(float(datum[key]), 1))
+        cmd = datum[-1]
+        print(fmt % (started, elapsed, cmd))
 
 
 if __name__ == '__main__':
