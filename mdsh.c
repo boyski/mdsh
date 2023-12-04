@@ -67,8 +67,13 @@ static int verbose;
 #define EV_VERBOSE PFX "_VERBOSE"
 #define EV_XTRACE PFX "_XTRACE"
 
+// start time,pid,ppid,status,elapsed,user time,sys time,$(MAKELEVEL),pwd,cmd
+#define CSV_FMT "%ld.%09ld,%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n"
+
 #define DEFAULT_MARKER "==-=="
 #define SEP ":"
+
+#define endof(str) strchr(str, '\0')
 
 // Nanoseconds per second.
 #define NSECS_PER_SEC 1000000000.0
@@ -166,8 +171,8 @@ by run time. Alternatively, timings are also kept by %s.\n",
     fprintf(f, "\n\
 %s: if present, points to a writable directory. Each shell command\n\
 will drop a file into that directory, named by its start time in\n\
-nanoseconds, summarizing the command in .csv format:\n\
-[pid,ppid,retcode,run time,user time,sys time,$(MAKELEVEL),pwd,cmd]\n",
+nanoseconds and pid, summarizing the command in .csv format:\n\
+[start time,pid,ppid,retcode,run time,user time,sys time,$(MAKELEVEL),pwd,cmd]\n",
         EV_DB);
 
     fprintf(f, "\n\
@@ -804,7 +809,7 @@ main(int argc, char *argv[])
             char *db_dir, *db_file;
 
             if ((db_dir = getenv(EV_DB))) {
-                if (asprintf(&db_file, "%s/%ld.%09ld.%05d.csv",
+                if (asprintf(&db_file, "%s/%ld.%09ld-%05d.csv",
                         db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
                     error("asprintf()", strerror(errno));
                 }
@@ -838,21 +843,48 @@ main(int argc, char *argv[])
 
         if (db_fp) {
             struct rusage summary;
-            char *cwd, *makelevel;
+            char *cwd, *cmd, *cmdbuf, *makelevel, *p;
+
+            // Strip meaningless newlines from front and back.
+            INSIST((cmdbuf = cmd = strdup(argv[argc - 1])));
+            while (*cmd == '\n') {
+                cmd++;
+            }
+            while (*(endof(cmd) - 1) == '\n') {
+                *(endof(cmd) - 1) = '\0';
+            }
+
+            // Convert interior newlines to semicolons in order to keep
+            // all recipes on one line.
+            for (p = cmd; *p; p++) {
+                if (*p == '\n') {
+                    *p = ';';
+                }
+            }
 
             INSIST((cwd = getcwd(NULL, 0)) != NULL);
             INSIST(!getrusage(RUSAGE_CHILDREN, &summary));
             makelevel = getenv("MAKELEVEL");
             // Note that the pid of *this* process is not shown.
-            // The "pid" is our child (shell) and the ppid is our parent.
-            INSIST(fprintf(db_fp, "%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n",
-                        pid, getppid(), rc, elapsed_nsec / NSECS_PER_SEC,
-                        summary.ru_utime.tv_sec, summary.ru_utime.tv_usec,
-                        summary.ru_stime.tv_sec, summary.ru_stime.tv_usec,
-                        makelevel ? makelevel : "-", cwd,
-                        argv[argc - 1]) > 0);
+            // The "pid" is our child (shell) and the ppid is our parent
+            // while we insist on anonymity.
+            INSIST(fprintf(db_fp, CSV_FMT,
+                starttime.tv_sec,
+                starttime.tv_nsec,
+                pid,
+                getppid(),
+                rc,
+                elapsed_nsec / NSECS_PER_SEC,
+                summary.ru_utime.tv_sec,
+                summary.ru_utime.tv_usec,
+                summary.ru_stime.tv_sec,
+                summary.ru_stime.tv_usec,
+                makelevel ? makelevel : "-",
+                cwd,
+                cmd) > 0);
             (void)fclose(db_fp);
             free(cwd);
+            free(cmdbuf);
         }
     }
 
