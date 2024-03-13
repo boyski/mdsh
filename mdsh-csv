@@ -15,10 +15,11 @@
 
 """
 Summarize the longest-running recipes from an MDSH_DB build with .csv files.
+Run "mdsh --help" for details.
 
 Other people have said they were able to import the .csv data to a
 spreadsheet which may be the simpler and more flexible way to analyze
-it but this little Python script may also be helpful.
+it but this little Python script could also be helpful.
 
 EXAMPLES:
 
@@ -61,6 +62,7 @@ def main():
         with open(path, encoding='utf-8') as f:
             for line in f:
                 data.append(line.strip().split(','))
+    assert data, 'no CSV data found'
 
     key = opts.key - 1
     if data[0][key][0].isdigit():

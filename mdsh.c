@@ -257,11 +257,11 @@ $ MDSH_TIMING=1 %s -c 'sleep 2.4'\n\
 - %s -c sleep 2.4 (2.4s)\n\
 \n\
 Real-life usage via make:\n\n\
-$ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=%s\n\
+$ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=%s ...\n\
 \n\
-$ make SHELL=%s MDSH_DBGSH=1\n\
+$ make SHELL=%s MDSH_DBGSH=1 ...\n\
 \n\
-$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=%s\n\
+$ rm -rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=%s ...\n\
 ",\
         prog, prog, prog, prog, prog, prog,
         prog, prog, prog, prog, prog, prog,
