@@ -2,7 +2,7 @@
 		The Make Diagnostic Shell
 
 The mdsh utility is a shell wrapper program primarily intended for use
-in analyzing makefile behavior though it could be used outsiode of make.
+in analyzing makefile behavior though it could be used outside of make.
 Its main intended use case is to help diagnose problems in complex,
 often massively parallel, builds.
 
@@ -16,7 +16,7 @@ environment variables in the MDSH_* namespace.  Aside from the extra
 fork/exec sequence it behaves *exactly* like the underlying shell
 (/bin/sh by default) with one minor exception: when passed the -h|--help
 flag it prints its own usage message instead of the shell's. Otherwise
-it execs the shell with an unmodified and unexamined argv.
+it will exec the shell with an unmodified and unexamined argv.
 
 Its value-added is in the things it can do before or after exec-ing the
 shell. Typically you'd tell make to use it by passing SHELL=mdsh on the
@@ -35,16 +35,17 @@ Again, see usage for details.
 
 		MDSH and .ONESHELL:
 
-Using mdsh in a makefile that employs .ONESHELL: can be tricky. See
+Warning: using mdsh in a makefile that employs .ONESHELL: can be tricky. See
 
 https://www.gnu.org/software/make/manual/make.html#:~:text=If%20.ONESHELL%20is%20provided
 
 for more, but the short version is that make maintains an internal
 list of POSIX-conformant shells and mdsh isn't on it, even though it
-effectively is POSIX since it execs bash. The only reasonable workaround
-is to link it to a name that _is_ recognized as a POSIX shell. Probably
-"rksh -> mdsh" is the best choice since almost no one uses rksh as an
-actual shell. It may be best to always use it as rksh to avoid surprises.
+effectively is a POSIX shell since it execs /bin/sh. The only reasonable
+workaround is to link it to a name that *is* recognized as a POSIX
+shell. Probably "rksh -> mdsh" is the best choice since almost no one
+uses rksh as an actual shell. In fact it may be best to always use it
+as rksh to avoid surprises.
 
 		Creating a .csv summary
 
