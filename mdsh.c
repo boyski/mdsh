@@ -122,6 +122,10 @@ SHELL=%s along with some subset of the %s_* environment\n\
 variables below may help diagnose complex make problems.\n",
     prog, prog, PFX);
 
+    fprintf(f, "\n\
+However, note that you may actually need SHELL=rksh or similar\n\
+for makefiles operating in .ONESHELL mode. See details below.\n");
+
     fprintf(f, "\nPass -H|--HELP for advanced/experimental options.\n");
 
     fprintf(f, "\nENVIRONMENT VARIABLES:\n");

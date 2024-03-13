@@ -15,15 +15,18 @@
 
 """
 Summarize the longest-running recipes from an MDSH_DB build with .csv files.
-Run "mdsh --help" for details.
+Run "mdsh --help" for details on how to get the .csv data.
 
 Other people have said they were able to import the .csv data to a
 spreadsheet which may be the simpler and more flexible way to analyze
 it but this little Python script could also be helpful.
 
+Keep in mind that some recipes may be recursive make invocations which
+contain many smaller recipes.
+
 EXAMPLES:
 
-Show the 10 longest recipes:
+Show the 10 longest-running recipes:
 
     %(prog)s -m10 /tmp/mdsh
 """
