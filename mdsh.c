@@ -68,6 +68,7 @@ static int verbose;
 #define EV_XTRACE PFX "_XTRACE"
 
 // start time,pid,ppid,status,elapsed,user time,sys time,$(MAKELEVEL),pwd,cmd
+#define CSV_HDR "START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,MAKELEVEL,PWD,RECIPE\n"
 #define CSV_FMT "%ld.%09ld,%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n"
 
 #define DEFAULT_MARKER "==-=="
@@ -810,7 +811,8 @@ main(int argc, char *argv[])
 
         INSIST((pid = fork()) >= 0);
         if (pid) {  // In the parent.
-            char *db_dir, *db_file;
+            char *db_dir, *db_file, *hdr_file;
+            int hdr_fd;
 
             if ((db_dir = getenv(EV_DB))) {
                 if (asprintf(&db_file, "%s/%ld.%09ld-%05d.csv",
@@ -819,6 +821,16 @@ main(int argc, char *argv[])
                 }
                 INSIST((db_fp = fopen(db_file, "w")) != NULL);
                 free(db_file);
+
+                // Drop a file documenting the CSV format. The first few jobs might
+                // compete to create this but that doesn't matter if it's atomic.
+                if (asprintf(&hdr_file, "%s/FORMAT", db_dir) == -1) {
+                    error("asprintf()", strerror(errno));
+                }
+                INSIST((hdr_fd = open(hdr_file, O_CREAT | O_WRONLY, 0666)) != -1);
+                INSIST((write(hdr_fd, CSV_HDR, strlen(CSV_HDR)) != -1));
+                (void)close(hdr_fd);
+                free(hdr_file);
             }
         } else {    // In the child.
             argv[0] = shell;
