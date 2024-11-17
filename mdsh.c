@@ -824,9 +824,7 @@ main(int argc, char *argv[])
 
                 // Drop a file documenting the CSV format. The first few jobs might
                 // compete to create this but that doesn't matter if it's atomic.
-                if (asprintf(&hdr_file, "%s/FORMAT", db_dir) == -1) {
-                    error("asprintf()", strerror(errno));
-                }
+                INSIST(asprintf(&hdr_file, "%s/FORMAT.txt", db_dir) != -1);
                 INSIST((hdr_fd = open(hdr_file, O_CREAT | O_WRONLY, 0666)) != -1);
                 INSIST((write(hdr_fd, CSV_HDR, strlen(CSV_HDR)) != -1));
                 (void)close(hdr_fd);
