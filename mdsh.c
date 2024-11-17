@@ -534,12 +534,9 @@ http_request(const char *server, const char *path)
 
     if ((abspath = realpath(path, NULL))) {
         slash = (!stat(abspath, &stbuf) && S_ISDIR(stbuf.st_mode)) ? "/" : "";
-        if (asprintf(&request,
+        INSIST(asprintf(&request,
             "GET %s%s HTTP/1.1\nHost: %s\nUser-agent: %s\nRange: bytes=0-%lu\n\n",
-                abspath, slash, server, prog, sizeof(readbuf) - 1) == -1) {
-            error("asprintf()", strerror(errno));
-            return EXIT_FAILURE;
-        }
+                abspath, slash, server, prog, sizeof(readbuf) - 1) != -1);
         free(abspath);
     } else {
         // Policy is to not print errors for nonexistent flush paths.
@@ -599,25 +596,22 @@ create_remove(const char *path)
     char *tmpf;
     int fd;
 
-    if (asprintf(&tmpf, "%s/.nfs_flush-%d.tmp", path, (int)getpid()) == -1) {
-        error("asprintf()", strerror(errno));
+    INSIST(asprintf(&tmpf, "%s/.nfs_flush-%d.tmp", path, (int)getpid()) != -1);
+    if (verbose) {
+        fprintf(stderr, "create(%s)\n", tmpf);
+    }
+    if ((fd = open(tmpf, O_CREAT | O_EXCL, 0666)) == -1) {
+        error(tmpf, strerror(errno));
     } else {
         if (verbose) {
-            fprintf(stderr, "create(%s)\n", tmpf);
+            fprintf(stderr, "remove(%s)\n", tmpf);
         }
-        if ((fd = open(tmpf, O_CREAT | O_EXCL, 0666)) == -1) {
+        if (close(fd) == -1 || unlink(tmpf) == -1) {
             error(tmpf, strerror(errno));
-        } else {
-            if (verbose) {
-                fprintf(stderr, "remove(%s)\n", tmpf);
-            }
-            if (close(fd) == -1 || unlink(tmpf) == -1) {
-                error(tmpf, strerror(errno));
-            }
         }
-
-        free(tmpf);
     }
+
+    free(tmpf);
 }
 
 static int
@@ -660,7 +654,6 @@ nfs_flush(const char *ev)
             DIR *odir;
 
             nfs_flush_dir(path);
-
             (void)http_request(http_server, path);
 
             /* Flush the immediate subdirs of each dir. */
@@ -673,16 +666,10 @@ nfs_flush(const char *ev)
                         // Ignore obvious SCM/VCS subdirectories.
                     } else if (dp->d_name[0] == '.') {
                         // Ignore all "dot" files, unlikely to be used in a build.
-                    } else if (strcmp(dp->d_name, "..") && strcmp(dp->d_name, ".")) {
-                        if (asprintf(&tpath, "%s/%s", path, dp->d_name) == -1) {
-                            error("asprintf()", strerror(errno));
-                            continue;
-                        }
-
+                    } else {
+                        INSIST(asprintf(&tpath, "%s/%s", path, dp->d_name) != -1);
                         nfs_flush_dir(tpath);
-
                         (void)http_request(http_server, tpath);
-
                         free(tpath);
                     }
                 }
@@ -815,10 +802,8 @@ main(int argc, char *argv[])
             int hdr_fd;
 
             if ((db_dir = getenv(EV_DB))) {
-                if (asprintf(&db_file, "%s/%ld.%09ld-%05d.csv",
-                        db_dir, starttime.tv_sec, starttime.tv_nsec, pid) == -1) {
-                    error("asprintf()", strerror(errno));
-                }
+                INSIST(asprintf(&db_file, "%s/%ld.%09ld-%05d.csv",
+                    db_dir, starttime.tv_sec, starttime.tv_nsec, pid) != -1);
                 INSIST((db_fp = fopen(db_file, "w")) != NULL);
                 free(db_file);
 
