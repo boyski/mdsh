@@ -38,7 +38,7 @@ test: mdsh
 	$(RM) -r $(MDSH_DB) && \
 	  mkdir $(MDSH_DB) && \
 	  MDSH_DB=$(MDSH_DB) \
-	    $(MAKE) --no-print-directory SHELL=$< dbtest
+	    $(MAKE) --no-print-directory SHELL=./$< dbtest
 	@head $(MDSH_DB)/FORMAT.txt $(MDSH_DB)/*.csv
 
 .PHONY: dbtest
