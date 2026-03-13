@@ -133,14 +133,18 @@ variables below may help diagnose complex make problems.\n",
 
     fprintf(f, "\n\
 However, note that you may actually need SHELL=rksh or similar\n\
-for makefiles operating in .ONESHELL mode. See details below.\n");
+for makefiles operating in .ONESHELL mode. See details below.\n\
+If you don't know what .ONESHELL is, feel free to ignore this.\n");
 
     fprintf(f, "\nPass -H|--HELP for advanced/experimental options.\n");
 
     fprintf(f, "\nENVIRONMENT VARIABLES:\n");
 
-    fprintf(f, "\n%s: override the default shell [/bin/sh] invoked by %s.\n",
-        EV_SHELL, prog);
+    fprintf(f, "\n%s: override the default shell [/bin/sh] invoked by %s.\n\
+Don't get confused: use SHELL=%s to tell make to use %s.\n\
+%s is useful only if you want to tell %s to hand off to\n\
+a shell other than /bin/sh.\n",
+        EV_SHELL, prog, prog, prog, EV_SHELL, prog);
 
     fprintf(f, "\n\
 %s: a colon-separated list of glob patterns representing file\n\
@@ -208,10 +212,10 @@ require stdin and stdout to be available to the terminal.\n");
     fprintf(f, "\n\
 GNU make maintains a compiled-in list of shells it knows to be\n\
 POSIX-conformant. Unfortunately mdsh isn't known to make by name\n\
-even though it wraps around /bin/sh which really is a POSIX shell.\n\
-This can cause make to get confused, especially in .ONESHELL: mode.\n\
-If this happens the suggested workaround is to use a symlink\n\
-rksh -> mdsh since rksh IS on the list but almost no one uses it.\n");
+even though it wraps around /bin/sh so it effectively *is* a POSIX shell.\n\
+This hardcoded naming can confuse make, especially in .ONESHELL: mode.\n\
+If this becomes an issue the suggested workaround is to use a symlink\n\
+rksh -> mdsh since rksh is on the list but almost no one uses it.\n");
 
     if (helplevel > 1) {
 
