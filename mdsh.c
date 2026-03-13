@@ -25,6 +25,7 @@
 #include <netdb.h>
 #include <regex.h>
 #include <search.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,6 +48,12 @@ static char *shell;
 static void *stash;
 static int fixup = 1;
 static int verbose;
+
+// MacOS and Linux use different struct timespec names.
+#ifdef __APPLE__
+#define st_atim st_atimespec
+#define st_mtim st_mtimespec
+#endif
 
 #define PFX "MDSH"
 #define EV_PS1 PFX ">> "
@@ -876,9 +883,9 @@ main(int argc, char *argv[])
                 rc,
                 elapsed_nsec / NSECS_PER_SEC,
                 summary.ru_utime.tv_sec,
-                summary.ru_utime.tv_usec,
+                (long)summary.ru_utime.tv_usec,
                 summary.ru_stime.tv_sec,
-                summary.ru_stime.tv_usec,
+                (long)summary.ru_stime.tv_usec,
                 makelevel ? makelevel : "-",
                 cwd,
                 cmd) > 0);
