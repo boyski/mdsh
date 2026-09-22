@@ -187,7 +187,7 @@ by run time. Alternatively, timings are also kept by %s.\n",
 %s: if present, points to a writable directory. Each shell command\n\
 will drop a file into that directory, named by its start time in\n\
 nanoseconds and pid, summarizing the command in .csv format:\n\
-[start time,pid,ppid,retcode,run time,user time,sys time,load avg,\n\
+[start time,pid,ppid,retcode,run time,user time,sys time,load avg,\
 $(MAKELEVEL),pwd,cmd]\n\
 The load avg is the 1-minute system load average when the command finished.\n",
         EV_DB);
