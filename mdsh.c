@@ -39,7 +39,9 @@
 
 typedef struct {
     const char *path;
-    struct timespec times[2];
+    struct timespec times[2];   // atime and mtime before the command ran
+    int existed;                // path could be stat-ed before the command
+    int created;                // path first matched after the command
 } pathtimes_s;
 
 static char **argv_;
@@ -144,8 +146,7 @@ If you don't know what .ONESHELL is, feel free to ignore this.\n");
     fprintf(f, "\n\
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
-any of their states (created, removed, written, or accessed/read).\n\
-This feature depends on Linux 'inotify' kernel extensions.\n",
+any of their states (created, removed, written, or accessed/read).\n",
         EV_PATHS);
 
     fprintf(f, "\n\
@@ -359,8 +360,6 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
 {
     pathtimes_s *pt = *((pathtimes_s **)nodep);
     struct stat stbuf;
-    glob_t refound;
-    size_t i;
 
     (void)depth; // don't need this
 
@@ -368,36 +367,90 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
         return;
     }
 
-    (void)memset(&refound, 0, sizeof(refound));
-    switch (glob(pt->path, 0, NULL, &refound)) {
-        case 0:
-            for (i = 0; i < refound.gl_pathc; i++) {
-                char *path = refound.gl_pathv[i];
+    if (pt->created) {
+        report(pt->path, "CREATED");
+    } else if (stat(pt->path, &stbuf) == -1) {
+        if (errno != ENOENT) {
+            error(pt->path, strerror(errno));
+        } else if (pt->existed) {
+            report(pt->path, "REMOVED");
+        }
+    } else if (!pt->existed) {
+        // E.g. a dangling symlink whose target has since appeared.
+        report(pt->path, "CREATED");
+    } else if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
+        report(pt->path, "MODIFIED");
+    } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
+        report(pt->path, "ACCESSED");
+    }
+}
 
-                if (stat(path, &stbuf) == -1) {
-                    error(path, strerror(errno));
-                } else if (!pt->times[0].tv_sec) {
-                    report(path, "CREATED");
-                } else {
-                    if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
-                        report(path, "MODIFIED");
-                    } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
-                        report(path, "ACCESSED");
-                    }
-                }
-            }
-            break;
-        case GLOB_NOMATCH:
-            if (pt->times[0].tv_sec) {
-                report(pt->path, "REMOVED");
-            }
-            break;
-        default:
-            perror(pt->path);
-            exit(1);
+// Add a path to the watch list unless it's already there. Before the
+// command runs (created == 0) its current state is recorded. After
+// the command (created != 0) any path not already known must be new.
+static void
+watch_add(const char *path, int created)
+{
+    pathtimes_s key, *pt;
+    struct stat stbuf;
+
+    key.path = path;
+    if (tfind((const void *)&key, &stash, pathcmp)) {
+        return;
     }
 
-    globfree(&refound);
+    INSIST((pt = calloc(sizeof(pathtimes_s), 1)) != NULL);
+    INSIST((pt->path = strdup(path)) != NULL);
+    pt->created = created;
+
+    if (!created && stat(pt->path, &stbuf) != -1) {
+        pt->existed = 1;
+        pt->times[0].tv_sec = stbuf.st_atim.tv_sec;
+        pt->times[0].tv_nsec = stbuf.st_atim.tv_nsec;
+        pt->times[1].tv_sec = stbuf.st_mtim.tv_sec;
+        pt->times[1].tv_nsec = stbuf.st_mtim.tv_nsec;
+        // Must push atime behind mtime due to "relatime".
+        if (stbuf.st_atim.tv_sec >= pt->times[1].tv_sec) {
+            pt->times[0].tv_sec = pt->times[1].tv_sec - 2;
+            pt->times[0].tv_nsec = 999;
+            if (utimensat(AT_FDCWD, pt->path, pt->times, 0) == -1) {
+                error(pt->path, strerror(errno));
+            }
+        }
+    }
+
+    INSIST(tsearch((const void *)pt, &stash, pathcmp) != NULL);
+}
+
+// Expand each glob pattern in a colon-separated list and add the
+// matching paths to the watch list. This is done both before and
+// after the command so files newly matching a pattern are noticed.
+static void
+watch_paths(const char *patterns, int after)
+{
+    char *buf, *pattern;
+    size_t i;
+
+    INSIST((buf = strdup(patterns)) != NULL);
+    for (pattern = strtok(buf, SEP); pattern; pattern = strtok(NULL, SEP)) {
+        glob_t found;
+
+        (void)memset(&found, 0, sizeof(found));
+        switch (glob(pattern, 0, NULL, &found)) {
+            case 0:
+                for (i = 0; i < found.gl_pathc; i++) {
+                    watch_add(found.gl_pathv[i], after);
+                }
+                break;
+            case GLOB_NOMATCH:
+                break;
+            default:
+		perror(pattern);
+                break;
+        }
+        globfree(&found);
+    }
+    free(buf);
 }
 
 static void
@@ -581,14 +634,13 @@ http_request(const char *server, const char *path)
     // enough to make and satisfy any read request. If the first
     // line doesn't look like "206 Partial-Content" we dump the
     // buffer as an ersatz error message.
-    if ((count = read(srvfd, readbuf, sizeof(readbuf))) == -1) {
-        if (write(1, readbuf, count) == -1) {
-            error("read()", strerror(errno));
-            return EXIT_FAILURE;
-        }
+    if ((count = read(srvfd, readbuf, sizeof(readbuf) - 1)) == -1) {
+        error("read()", strerror(errno));
+        return EXIT_FAILURE;
     } else {
         char *nl, *ok;
 
+        readbuf[count] = '\0';
         nl = strchr(readbuf, '\n');
         ok = strstr(readbuf, " 206 ");
         if (!nl || !ok || ok > nl) {
@@ -703,7 +755,7 @@ int
 main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
-    char *watch, *pattern;
+    char *watch;
     FILE *db_fp = NULL;
     struct timespec starttime, endtime;
     pid_t pid;
@@ -736,52 +788,7 @@ main(int argc, char *argv[])
 
     // Record the state (absence/presence and atime/mtime if present) of files.
     if ((watch = getenv(EV_PATHS))) {
-        size_t i;
-        glob_t found;
-        int globflags = GLOB_NOCHECK;
-
-        // Run through the patterns, deriving a list of matched paths.
-        (void)memset(&found, 0, sizeof(found));
-        INSIST((watch = strdup(watch)) != NULL);
-        for (pattern = strtok(watch, SEP); pattern; pattern = strtok(NULL, SEP)) {
-            switch (glob(pattern, globflags, NULL, &found)) {
-                case 0:
-                case GLOB_NOMATCH:
-                    break;
-                default:
-                    perror(pattern);
-                    break;
-            }
-            globflags |= GLOB_APPEND;
-        }
-
-        for (i = 0; i < found.gl_pathc; i++) {
-            pathtimes_s *pt;
-            struct stat stbuf;
-
-            INSIST((pt = calloc(sizeof(pathtimes_s), 1)) != NULL);
-            pt->path = strdup(found.gl_pathv[i]);
-            if (stat(pt->path, &stbuf) != -1) {
-                pt->times[0].tv_sec = stbuf.st_atim.tv_sec;
-                pt->times[0].tv_nsec = stbuf.st_atim.tv_nsec;
-                pt->times[1].tv_sec = stbuf.st_mtim.tv_sec;
-                pt->times[1].tv_nsec = stbuf.st_mtim.tv_nsec;
-                // Must push atime behind mtime due to "relatime".
-                if (stbuf.st_atim.tv_sec >= pt->times[1].tv_nsec) {
-                    pt->times[0].tv_sec = pt->times[1].tv_sec - 2;
-                    pt->times[0].tv_nsec = 999;
-                    if (utimensat(AT_FDCWD, pt->path, pt->times, 0) == -1) {
-                        error(pt->path, strerror(errno));
-                    }
-                }
-            } else {
-                (void)memset(&stbuf, '\0', sizeof(stbuf));
-            }
-            INSIST(tsearch((const void *)pt, &stash, pathcmp) != NULL);
-        }
-
-        globfree(&found);
-        free(watch);
+        watch_paths(watch, 0);
     }
 
     if (getenv(EV_CMDRE)) {
@@ -917,7 +924,11 @@ main(int argc, char *argv[])
         }
     }
 
-    // Revisit the original list of files and report any changes.
+    // Pick up any files which newly match the patterns, then revisit
+    // the full list and report any changes.
+    if ((watch = getenv(EV_PATHS))) {
+        watch_paths(watch, 1);
+    }
     if (stash) {
         twalk(stash, watch_walk);
     }

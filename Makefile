@@ -19,7 +19,7 @@ all: $(TARGETS)
 demo: mdsh_temps := foo* bar* baz*
 demo: export MDSH_PATHS=$(subst $(space),:,$(mdsh_temps))
 demo: mdsh
-	############ Testing $< path tracking with MDSH_PATHS=$(MDSH_PATHS) ############
+	############ Testing $< path tracking with MDSH_PATHS='$(MDSH_PATHS)' ############
 	$(RM) $(mdsh_temps)
 	./$< -c 'uname > foo'
 	./$< -c 'touch bar'
