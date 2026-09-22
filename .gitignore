@@ -3,3 +3,4 @@ mdsh_db
 foo
 bar
 *.o
+*.dSYM
