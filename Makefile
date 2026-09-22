@@ -6,27 +6,33 @@ TARGETS := mdsh
 # Meaningless as is, but may be activated by being exported in "test".
 MDSH_DB := $(CURDIR)/mdsh_db
 
+empty :=
+space := $(empty) $(empty)
+
 .PHONY: all
 all: $(TARGETS)
 
 %: %.c
 	$(CC) -g -o $@ -Wall -Wextra $<
 
-# Consider passing MDSH_HTTP_SERVER=<server> for this test to
+.PHONY: demo
+demo: mdsh_temps := foo* bar* baz*
+demo: export MDSH_PATHS=$(subst $(space),:,$(mdsh_temps))
+demo: mdsh
+	############ Testing $< path tracking with MDSH_PATHS=$(MDSH_PATHS) ############
+	$(RM) $(mdsh_temps)
+	./$< -c 'uname > foo'
+	./$< -c 'touch bar'
+	./$< -c 'touch foo bar'
+	./$< -c 'uname > foo; uname > baz'
+	./$< -c 'grep -c . foo bar baz > /dev/null'
+	./$< -c '$(RM) $(mdsh_temps)'
+
+# Advanced: pass MDSH_HTTP_SERVER=<server> for this test to
 # exercise HTTP cache flushing. The web server would need read
 # access to files in local NFS.
 .PHONY: test
-test: export MDSH_PATHS=foo*:bar
-test: mdsh
-	@$(RM) foo* bar
-
-	############ Testing $< path tracking ... ############
-	./$< -c 'uname > foo'
-	./$< -c 'touch foo foobar'
-	./$< -c 'uname > foo; uname > bar'
-	./$< -c 'grep -c . foo bar > /dev/null'
-	./$< -c '$(RM) foo* bar'
-
+test: mdsh | demo
 	############ Testing $< NFS flushing ... ############
 	$(strip MDSH_VERBOSE=1 MDSH_PRE_FLUSH_PATHS=. \
 	  ./$< -c date)

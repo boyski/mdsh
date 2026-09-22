@@ -140,12 +140,6 @@ If you don't know what .ONESHELL is, feel free to ignore this.\n");
 
     fprintf(f, "\nENVIRONMENT VARIABLES:\n");
 
-    fprintf(f, "\n%s: override the default shell [/bin/sh] invoked by %s.\n\
-Don't get confused: use SHELL=%s to tell make to use %s.\n\
-%s is useful only if you want to tell %s to hand off to\n\
-a shell other than /bin/sh.\n",
-        EV_SHELL, prog, prog, prog, EV_SHELL, prog);
-
     fprintf(f, "\n\
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
@@ -163,9 +157,11 @@ along with each %s change message.\n",
         EV_MARKER);
 
     fprintf(f, "\n\
-%s: if set, printed command lines will not have whitespace\n\
-cleaned up.\n",
-        EV_NOFIXUP);
+%s: by default %s cleans up whitespace in commands\n\
+before printing them because make recipes often expand to long\n\
+hard-to-read strings containing multiple spaces and newlines. This\n\
+flag will suppress that behavior.\n",
+        EV_NOFIXUP, prog);
 
     fprintf(f, "\n\
 %s: if set, the current working directory will be printed\n\
@@ -198,6 +194,12 @@ compared against the shell command. If a match is found an\n\
 interactive debug shell will be invoked before the command runs.\n",
         EV_CMDRE);
 
+    fprintf(f, "\n%s: override the default shell [/bin/sh] invoked by %s.\n\
+Don't get confused: use SHELL=%s to tell make to use %s.\n\
+%s is useful only if you want to tell %s to hand off to\n\
+a shell other than /bin/sh.\n",
+        EV_SHELL, prog, prog, prog, EV_SHELL, prog);
+
     fprintf(f, "\n\
 %s: if the underlying shell process exits with a failure status\n\
 and this is set, %s will run an interactive shell to help analyze\n\
@@ -211,10 +213,10 @@ require stdin and stdout to be available to the terminal.\n");
 
     fprintf(f, "\n\
 GNU make maintains a compiled-in list of shells it knows to be\n\
-POSIX-conformant. Unfortunately mdsh isn't known to make by name\n\
-even though it wraps around /bin/sh so it effectively *is* a POSIX shell.\n\
-This hardcoded naming can confuse make, especially in .ONESHELL: mode.\n\
-If this becomes an issue the suggested workaround is to use a symlink\n\
+POSIX-conformant. Unfortunately mdsh isn't known to make by name even\n\
+though it wraps around /bin/sh and thus effectively *is* a POSIX shell.\n\
+Not knowing mdsh is POSIX can confuse make, especially in .ONESHELL mode.\n\
+If this becomes an issue the suggested workaround is to rely on a symlink\n\
 rksh -> mdsh since rksh is on the list but almost no one uses it.\n");
 
     if (helplevel > 1) {
@@ -251,7 +253,7 @@ rksh -> mdsh since rksh is on the list but almost no one uses it.\n");
     }
 
     fprintf(f, "\n\
-EXAMPLES:\n\n\
+EXAMPLES (run in sequence):\n\n\
 $ MDSH_PATHS=foo:bar %s -c 'touch foo'\n\
 %s: ==-== CREATED: foo\n\
 \n\
