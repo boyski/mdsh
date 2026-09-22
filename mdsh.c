@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright (C) 2018-2020 David Boyce
+ * Copyright (C) 2018-2026 David Boyce
  *
  * This program is free software; you can redistribute it and/or modify it under
  * the terms of the GNU General Public License as published by the Free Software
@@ -74,9 +74,10 @@ static int verbose;
 #define EV_VERBOSE PFX "_VERBOSE"
 #define EV_XTRACE PFX "_XTRACE"
 
-// start time,pid,ppid,status,elapsed,user time,sys time,$(MAKELEVEL),pwd,cmd
-#define CSV_HDR "START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,MAKELEVEL,PWD,RECIPE\n"
-#define CSV_FMT "%ld.%09ld,%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s\n"
+// start time,pid,ppid,status,elapsed,user time,sys time,load avg,$(MAKELEVEL),pwd,cmd
+// The recipe must remain the last field since it may contain unquoted commas.
+#define CSV_HDR "START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,LOAD AVG,MAKELEVEL,PWD,RECIPE\n"
+#define CSV_FMT "%ld.%09ld,%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s,%s\n"
 
 #define DEFAULT_MARKER "==-=="
 #define SEP ":"
@@ -185,7 +186,9 @@ by run time. Alternatively, timings are also kept by %s.\n",
 %s: if present, points to a writable directory. Each shell command\n\
 will drop a file into that directory, named by its start time in\n\
 nanoseconds and pid, summarizing the command in .csv format:\n\
-[start time,pid,ppid,retcode,run time,user time,sys time,$(MAKELEVEL),pwd,cmd]\n",
+[start time,pid,ppid,retcode,run time,user time,sys time,load avg,\n\
+$(MAKELEVEL),pwd,cmd]\n\
+The load avg is the 1-minute system load average when the command finished.\n",
         EV_DB);
 
     fprintf(f, "\n\
@@ -857,6 +860,8 @@ main(int argc, char *argv[])
         if (db_fp) {
             struct rusage summary;
             char *cwd, *cmd, *cmdbuf, *makelevel, *p;
+            char loadbuf[32];
+            double loadavg[1];
 
             // Strip meaningless newlines from front and back.
             INSIST((cmdbuf = cmd = strdup(argv[argc - 1])));
@@ -878,6 +883,16 @@ main(int argc, char *argv[])
             INSIST((cwd = getcwd(NULL, 0)) != NULL);
             INSIST(!getrusage(RUSAGE_CHILDREN, &summary));
             makelevel = getenv("MAKELEVEL");
+
+            // Record the 1-minute load average at the time the command
+            // finished. Not being able to get it is no reason to fail
+            // the build so just record a placeholder in that case.
+            if (getloadavg(loadavg, 1) == 1) {
+                (void)snprintf(loadbuf, sizeof(loadbuf), "%.2f", loadavg[0]);
+            } else {
+                (void)snprintf(loadbuf, sizeof(loadbuf), "-");
+            }
+
             // Note that the pid of *this* process is not shown.
             // The "pid" is our child (shell) and the ppid is our parent
             // while we insist on anonymity.
@@ -892,6 +907,7 @@ main(int argc, char *argv[])
                 (long)summary.ru_utime.tv_usec,
                 summary.ru_stime.tv_sec,
                 (long)summary.ru_stime.tv_usec,
+                loadbuf,
                 makelevel ? makelevel : "-",
                 cwd,
                 cmd) > 0);
