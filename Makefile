@@ -53,7 +53,7 @@ install: all
 	$(if $(mdsh),cp -a mdsh $(mdsh))
 
 .PHONY: clean
-clean: cleanups := $(wildcard *.o $(TARGETS) $(MDSH_DB))
+clean: cleanups := $(wildcard *.o *.dSYM $(TARGETS) $(MDSH_DB))
 clean:
 	$(if $(cleanups),$(RM) -r $(cleanups))
 
