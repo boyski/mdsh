@@ -65,7 +65,7 @@ def main():
         help="dump all .csv files to stdout, sorted by duration")
     parser.add_argument(
         '-k', '--key', type=int, default=5,
-        help="sort on the specified key [%(default)s (elapsed time)];")
+        help="sort on the specified key [%(default)s (elapsed time)]")
     parser.add_argument(
         '-m', '--max', type=int, default=0,
         metavar='N',
