@@ -19,6 +19,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
+#include <ftw.h>
 #include <glob.h>
 #include <libgen.h>
 #include <limits.h>
@@ -42,6 +44,7 @@ typedef struct {
     struct timespec times[2];   // atime and mtime before the command ran
     int existed;                // path could be stat-ed before the command
     int created;                // path first matched after the command
+    int isdir;                  // path is a directory
 } pathtimes_s;
 
 static char **argv_;
@@ -146,7 +149,13 @@ If you don't know what .ONESHELL is, feel free to ignore this.\n");
     fprintf(f, "\n\
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
-any of their states (created, removed, written, or accessed/read).\n",
+any of their states (created, removed, written, or accessed/read).\n\
+A pattern with no '/' in it is matched against the base name of\n\
+every file below the current directory so e.g. '*.o' finds object\n\
+files at any depth without needing '*/*.o' etc. A pattern which\n\
+does contain a '/' is expanded as a normal glob relative to the\n\
+current directory. Directories are reported only when created or\n\
+removed, never when an entry within them changes.\n",
         EV_PATHS);
 
     fprintf(f, "\n\
@@ -211,9 +220,9 @@ the failing state.\n",
         EV_DBGSH, prog);
 
     fprintf(f, "\n\
-However, be aware that starting an interactive shell can run into\n\
+In all cases, be aware that starting an interactive shell can run into\n\
 trouble in -j mode which generally closes stdin. Interactive shells\n\
-require stdin and stdout to be available to the terminal.\n");
+require stdin and stdout being available to the terminal.\n");
 
     fprintf(f, "\n\
 GNU make maintains a compiled-in list of shells it knows to be\n\
@@ -378,6 +387,10 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
     } else if (!pt->existed) {
         // E.g. a dangling symlink whose target has since appeared.
         report(pt->path, "CREATED");
+    } else if (S_ISDIR(stbuf.st_mode) || pt->isdir) {
+        // Directory timestamps change when an entry is added or
+        // removed which says nothing about the directory itself.
+        return;
     } else if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
         report(pt->path, "MODIFIED");
     } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
@@ -405,51 +418,164 @@ watch_add(const char *path, int created)
 
     if (!created && stat(pt->path, &stbuf) != -1) {
         pt->existed = 1;
+        pt->isdir = S_ISDIR(stbuf.st_mode);
         pt->times[0].tv_sec = stbuf.st_atim.tv_sec;
         pt->times[0].tv_nsec = stbuf.st_atim.tv_nsec;
         pt->times[1].tv_sec = stbuf.st_mtim.tv_sec;
         pt->times[1].tv_nsec = stbuf.st_mtim.tv_nsec;
-        // Must push atime behind mtime due to "relatime".
-        if (stbuf.st_atim.tv_sec >= pt->times[1].tv_sec) {
+#ifdef __linux__
+        // Linux mounts default to "relatime" which updates atime on
+        // read only when it's no later than mtime, so atime must be
+        // pushed behind mtime for a read to be noticed. Systems
+        // which record every read (MacOS, *BSD, ...) need none of
+        // this and are better left untouched.
+        if (!pt->isdir && stbuf.st_atim.tv_sec >= pt->times[1].tv_sec) {
             pt->times[0].tv_sec = pt->times[1].tv_sec - 2;
             pt->times[0].tv_nsec = 999;
             if (utimensat(AT_FDCWD, pt->path, pt->times, 0) == -1) {
                 error(pt->path, strerror(errno));
             }
         }
+#endif
     }
 
     INSIST(tsearch((const void *)pt, &stash, pathcmp) != NULL);
 }
 
-// Expand each glob pattern in a colon-separated list and add the
-// matching paths to the watch list. This is done both before and
-// after the command so files newly matching a pattern are noticed.
+// Directories which are never descended into during the walk.
+static const char *prunedirs[] = {".git", ".svn"};
+
+// Pruning the walk requires FTW_ACTIONRETVAL which is a GNU
+// extension. Elsewhere (MacOS, *BSD, ...) the uninteresting
+// subtrees must be walked and their contents ignored instead.
+#ifdef FTW_ACTIONRETVAL
+#define WALK_FLAGS (FTW_PHYS | FTW_ACTIONRETVAL)
+#else
+#define WALK_FLAGS (FTW_PHYS)
+#define FTW_CONTINUE 0
+#define FTW_SKIP_SUBTREE 0
+#endif
+
+#ifndef FTW_ACTIONRETVAL
+// Is any directory component of this path one we skip over? Only
+// needed when the walk itself cannot be pruned.
+static int
+under_prunedir(const char *path)
+{
+    const char *sl;
+    size_t i, len;
+
+    for (i = 0; i < sizeof(prunedirs) / sizeof(prunedirs[0]); i++) {
+        len = strlen(prunedirs[i]);
+        for (sl = path; (sl = strchr(sl, '/')); sl++) {
+            if ((size_t)(sl - path) >= len &&
+                    !strncmp(sl - len, prunedirs[i], len) &&
+                    (sl - len == path || *(sl - len - 1) == '/')) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+#endif
+
+// Base name patterns for the current tree walk, and whether the
+// walk is the one following the command.
+static char **basepats;
+static size_t nbasepats;
+static int walk_after;
+
+// Called for each file below the current directory. Any file whose
+// base name matches one of the patterns joins the watch list.
+static int
+watch_visit(const char *path, const struct stat *sb, int type,
+            struct FTW *ftwbuf)
+{
+    size_t i;
+
+    (void)sb;
+
+    // Skip the starting directory itself along with anything we
+    // were unable to look at.
+    if (ftwbuf->level == 0 ||
+            (type != FTW_F && type != FTW_D && type != FTW_SL)) {
+        return FTW_CONTINUE;
+    }
+
+    // Version control metadata changes constantly and is of no
+    // interest, so prune those directories entirely.
+    if (type == FTW_D) {
+        for (i = 0; i < sizeof(prunedirs) / sizeof(prunedirs[0]); i++) {
+            if (!strcmp(path + ftwbuf->base, prunedirs[i])) {
+                return FTW_SKIP_SUBTREE;
+            }
+        }
+    }
+
+#ifndef FTW_ACTIONRETVAL
+    // Without a prunable walk the subtree arrives anyway and must
+    // be filtered out here.
+    if (under_prunedir(path)) {
+        return FTW_CONTINUE;
+    }
+#endif
+
+    for (i = 0; i < nbasepats; i++) {
+        if (!fnmatch(basepats[i], path + ftwbuf->base, 0)) {
+            // Paths come back from nftw() prefixed with "./".
+            watch_add(strncmp(path, "./", 2) ? path : path + 2, walk_after);
+            break;
+        }
+    }
+
+    return FTW_CONTINUE;
+}
+
+// Add the paths matching a colon-separated list of patterns to the
+// watch list. This is done both before and after the command so
+// files newly matching a pattern are noticed. A pattern containing
+// a '/' is treated as a glob relative to the current directory;
+// one without is matched against base names anywhere in the tree.
 static void
 watch_paths(const char *patterns, int after)
 {
     char *buf, *pattern;
     size_t i;
+    int rc;
 
     INSIST((buf = strdup(patterns)) != NULL);
     for (pattern = strtok(buf, SEP); pattern; pattern = strtok(NULL, SEP)) {
         glob_t found;
 
+        if (!strchr(pattern, '/')) {
+            INSIST((basepats = realloc(basepats,
+                    (nbasepats + 1) * sizeof(char *))) != NULL);
+            basepats[nbasepats++] = pattern;
+            continue;
+        }
+
+        // A pattern matching nothing is fine, anything else going
+        // wrong here means we are out of memory or similar.
         (void)memset(&found, 0, sizeof(found));
-        switch (glob(pattern, 0, NULL, &found)) {
-            case 0:
-                for (i = 0; i < found.gl_pathc; i++) {
-                    watch_add(found.gl_pathv[i], after);
-                }
-                break;
-            case GLOB_NOMATCH:
-                break;
-            default:
-		perror(pattern);
-                break;
+        rc = glob(pattern, 0, NULL, &found);
+        INSIST(rc == 0 || rc == GLOB_NOMATCH, "glob(\"%s\")", pattern);
+        for (i = 0; rc == 0 && i < found.gl_pathc; i++) {
+            watch_add(found.gl_pathv[i], after);
         }
         globfree(&found);
     }
+
+    // One walk of the tree covers all base name patterns at once.
+    // Symlinks are not followed in order to avoid cycles.
+    if (nbasepats) {
+        walk_after = after;
+        INSIST(nftw(".", watch_visit, 16, WALK_FLAGS) != -1, "%s", EV_PATHS);
+        free(basepats);
+        basepats = NULL;
+        nbasepats = 0;
+    }
+
     free(buf);
 }
 
