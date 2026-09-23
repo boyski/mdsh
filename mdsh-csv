@@ -14,23 +14,23 @@
 # this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Summarize the longest-running recipes from an MDSH_DB build with .csv files.
+Summarize the longest-running commands from an MDSH_DB build with .csv files.
 Run "mdsh --help" for details on how to get the .csv data.
 
 Other people have said they were able to import the .csv data to a
 spreadsheet which may be the simpler and more flexible way to analyze
 it but this little Python script could also be helpful.
 
-Keep in mind that some recipes may be recursive make invocations which
+Keep in mind that some commands may be recursive make invocations which
 contain many smaller recipes.
 
 EXAMPLES:
 
-Show the 10 longest-running recipes:
+Show the 10 longest-running commands:
 
     %(prog)s -m10 /tmp/mdsh
 
-Show the 10 recipes which finished under the highest system load:
+Show the 10 commands which finished under the highest system load:
 
     %(prog)s -m10 -k8 /tmp/mdsh
 """
@@ -40,7 +40,7 @@ import glob
 import os.path as op
 
 CSV_HDR = ('START TIME', 'PID', 'PPID', 'STATUS', 'ELAPSED',
-           'USER TIME', 'SYS TIME', 'LOAD AVG', 'MAKELEVEL', 'PWD', 'RECIPE')
+           'USER TIME', 'SYS TIME', 'LOAD AVG', 'MAKELEVEL', 'PWD', 'COMMAND')
 
 ELAPSED = CSV_HDR.index('ELAPSED')
 LOADAVG = CSV_HDR.index('LOAD AVG')
@@ -69,11 +69,11 @@ def main():
     parser.add_argument(
         '-m', '--max', type=int, default=0,
         metavar='N',
-        help="show the top N (slowest) recipes")
+        help="show the top N (slowest) commands")
     parser.add_argument(
         '-t', '--truncate', type=int, default=0,
         metavar='N',
-        help="truncate recipe command lines to N characters")
+        help="truncate command lines to N characters")
     parser.add_argument(
         'path',
         help="path to dir containing generated MDSH .csv files")
@@ -89,7 +89,7 @@ def main():
     for path in paths:
         with open(path, encoding='utf-8') as f:
             for line in f:
-                # The recipe is last and may contain commas so limit
+                # The command is last and may contain commas so limit
                 # the split to the number of fields.
                 datum = line.strip().split(',', maxsplit=len(CSV_HDR) - 1)
                 if opts.truncate and len(datum[-1]) > opts.truncate:
@@ -115,7 +115,7 @@ def main():
     # start time,pid,ppid,status,elapsed,user time,sys time,load avg,
     # makelevel,pwd,cmd
     fmt = '%-10s %-10s %-8s %s'
-    print(fmt % ('STARTED', 'ELAPSED', 'LOAD', 'RECIPE'))
+    print(fmt % ('STARTED', 'ELAPSED', 'LOAD', 'COMMAND'))
     for i, datum in enumerate(data):
         if opts.max and i == opts.max:
             break

@@ -34,6 +34,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -50,8 +51,16 @@ typedef struct {
 static char **argv_;
 static char prog[PATH_MAX] = "??";
 static char *shell;
+static char *shellbase;   // basename() of the above, kept separately
+                          // because basename() may modify its argument
 static void *stash;
 static int fixup = 1;
+
+// The status INSIST() failures exit with. Once the command has run
+// this becomes the command's own status if it failed, so an internal
+// error afterwards reports what the caller would otherwise have
+// seen. A failure is always reported as such, never as success.
+static int insist_rc = EXIT_FAILURE;
 static int verbose;
 
 // MacOS and Linux use different struct timespec names.
@@ -80,9 +89,9 @@ static int verbose;
 #define EV_XTRACE PFX "_XTRACE"
 
 // start time,pid,ppid,status,elapsed,user time,sys time,load avg,$(MAKELEVEL),pwd,cmd
-// The recipe must remain the last field since it may contain unquoted commas.
-#define CSV_HDR "START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,LOAD AVG,MAKELEVEL,PWD,RECIPE\n"
-#define CSV_FMT "%ld.%09ld,%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s,%s\n"
+// The command must remain the last field since it may contain unquoted commas.
+#define CSV_HDR "START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,LOAD AVG,MAKELEVEL,PWD,COMMAND\n"
+#define CSV_FMT "%lld.%09ld,%d,%d,%d,%f,%lld.%06ld,%lld.%06ld,%s,%s,%s,%s\n"
 
 #define DEFAULT_MARKER "==-=="
 
@@ -93,31 +102,36 @@ static int verbose;
 // Nanoseconds per second.
 #define NSECS_PER_SEC 1000000000.0
 
-#define TIME_GT(left, right) ((left.tv_sec > right.tv_sec) || \
-        (left.tv_sec == right.tv_sec && left.tv_nsec > right.tv_nsec))
+#define TIME_GT(left, right) (((left).tv_sec > (right).tv_sec) || \
+        ((left).tv_sec == (right).tv_sec && (left).tv_nsec > (right).tv_nsec))
 
 // Get first argument of __VA_ARGS__ if any.
-#define _INSIST_FIRST_ARG(...) _INSIST_FIRST_HELPER(__VA_ARGS__, throwaway)
-#define _INSIST_FIRST_HELPER(first, ...) "" #first
+#define INSIST_FIRST_ARG_(...) INSIST_FIRST_HELPER_(__VA_ARGS__, throwaway)
+#define INSIST_FIRST_HELPER_(first, ...) "" #first
 
 // Print caller function name, file name, line_number, error message
 // and optional supporting arguments. Exit with failure code.
 // Supporting arguments are a printf() format string followed
 // by respective printf() arguments.
-#define _INSIST_DIE(err_msg, ...) if (1) { \
+#define INSIST_DIE_(err_msg, ...) do { \
     fprintf(stderr, "%s: Error: %s() %s:%d [%s]", \
-    prog, __FUNCTION__, __FILE__, __LINE__, err_msg); \
+    prog, __func__, __FILE__, __LINE__, err_msg); \
     if (errno) fprintf(stderr, ": %s", strerror(errno)); \
-    if (strcmp(_INSIST_FIRST_ARG(__VA_ARGS__), "")) \
+    if (strcmp(INSIST_FIRST_ARG_(__VA_ARGS__), "")) \
         fprintf(stderr, ": " __VA_ARGS__); \
     fputc('\n', stderr); \
     fflush(stderr); \
-    exit(EXIT_FAILURE); \
-}
+    exit(insist_rc); \
+} while (0)
 
-// Check the condition to be true, otherwise call _INSIST_DIE above with
+// Note that INSIST_DIE_ exits with insist_rc rather than a fixed
+// code, see its declaration above.
+
+// Check the condition to be true, otherwise call INSIST_DIE_ above with
 // condition as string and optional supporting arguments.
-#define INSIST(cond, ...) if (!(cond)) {_INSIST_DIE(#cond, ##__VA_ARGS__);}
+#define INSIST(cond, ...) do { \
+    if (!(cond)) {INSIST_DIE_(#cond, ##__VA_ARGS__);} \
+} while (0)
 
 #define LASTCHAR(str) (strrchr(str, '\0') - 1)
 
@@ -154,7 +168,7 @@ any of their states (created, removed, written, or accessed/read).\n\
 Each report is prefixed with the $(MAKELEVEL) of the reporting\n\
 process if running under GNU make because in a recursive make each\n\
 make in the chain may report the same change.\n\
-A pattern with no '/' in it is matched against the base name of\n\
+A pattern containing no '/' is matched against the base name of\n\
 every file below the current directory so e.g. '*.o' finds object\n\
 files at any depth without needing '*/*.o' etc. A pattern which\n\
 does contain a '/' is expanded as a normal glob relative to the\n\
@@ -337,9 +351,9 @@ report(const char *path, const char *change)
     char *marker = getenv(EV_MARKER);
     char *mlev = getenv("MAKELEVEL");
 
-    // Recursive make means the same file mod may be seen by
-    // multiple makes so the report says which level saw it.
-    // When $(MAKELEVEL) is not present the placeholder is used.
+    // Recursive make means the same file mod could be seen by
+    // multiple makes so the report shows GNU make's $(MAKELEVEL)
+    // for disambiguation if present.
     marker = marker ? marker : DEFAULT_MARKER;
     if (mlev) {
 	fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, marker, change, path);
@@ -409,34 +423,45 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
 // command runs (created == 0) its current state is recorded. After
 // the command (created != 0) any path not already known must be new.
 static void
-watch_add(const char *path, int created)
+watch_add(const char *path, int created, const struct stat *sb)
 {
-    pathtimes_s key, *pt;
+    pathtimes_s *pt, **node;
     struct stat stbuf;
-
-    key.path = path;
-    if (tfind((const void *)&key, &stash, pathcmp)) {
-        return;
-    }
 
     INSIST((pt = calloc(sizeof(pathtimes_s), 1)) != NULL);
     INSIST((pt->path = strdup(path)) != NULL);
     pt->created = created;
 
-    if (!created && stat(pt->path, &stbuf) != -1) {
+    // tsearch() hands back the existing entry when this path is
+    // already known, in which case the new one is dropped. Doing
+    // it this way costs one tree lookup rather than two.
+    INSIST((node = (pathtimes_s **)
+        tsearch((const void *)pt, &stash, pathcmp)) != NULL);
+    if (*node != pt) {
+        free((void *)pt->path);
+        free(pt);
+        return;
+    }
+
+    // The tree walk has already stat-ed most paths on our behalf.
+    if (!created && !sb && stat(path, &stbuf) != -1) {
+        sb = &stbuf;
+    }
+
+    if (!created && sb) {
         pt->existed = 1;
-        pt->isdir = S_ISDIR(stbuf.st_mode);
-        pt->times[0].tv_sec = stbuf.st_atim.tv_sec;
-        pt->times[0].tv_nsec = stbuf.st_atim.tv_nsec;
-        pt->times[1].tv_sec = stbuf.st_mtim.tv_sec;
-        pt->times[1].tv_nsec = stbuf.st_mtim.tv_nsec;
+        pt->isdir = S_ISDIR(sb->st_mode);
+        pt->times[0].tv_sec = sb->st_atim.tv_sec;
+        pt->times[0].tv_nsec = sb->st_atim.tv_nsec;
+        pt->times[1].tv_sec = sb->st_mtim.tv_sec;
+        pt->times[1].tv_nsec = sb->st_mtim.tv_nsec;
 #ifdef __linux__
         // Linux mounts default to "relatime" which updates atime on
         // read only when it's no later than mtime, so atime must be
         // pushed behind mtime for a read to be noticed. Systems
         // which record every read (MacOS, *BSD, ...) need none of
         // this and are better left untouched.
-        if (!pt->isdir && stbuf.st_atim.tv_sec >= pt->times[1].tv_sec) {
+        if (!pt->isdir && sb->st_atim.tv_sec >= pt->times[1].tv_sec) {
             pt->times[0].tv_sec = pt->times[1].tv_sec - 2;
             pt->times[0].tv_nsec = 999;
             if (utimensat(AT_FDCWD, pt->path, pt->times, 0) == -1) {
@@ -445,8 +470,6 @@ watch_add(const char *path, int created)
         }
 #endif
     }
-
-    INSIST(tsearch((const void *)pt, &stash, pathcmp) != NULL);
 }
 
 // Directories which are never descended into during the walk.
@@ -499,8 +522,6 @@ watch_visit(const char *path, const struct stat *sb, int type,
 {
     size_t i;
 
-    (void)sb;
-
     // Skip the starting directory itself along with anything we
     // were unable to look at.
     if (ftwbuf->level == 0 ||
@@ -528,8 +549,11 @@ watch_visit(const char *path, const struct stat *sb, int type,
 
     for (i = 0; i < nbasepats; i++) {
         if (!fnmatch(basepats[i], path + ftwbuf->base, 0)) {
-            // Paths come back from nftw() prefixed with "./".
-            watch_add(strncmp(path, "./", 2) ? path : path + 2, walk_after);
+            // Paths come back from nftw() prefixed with "./". The
+            // walk stats symlinks themselves rather than what they
+            // point to, so those are left to watch_add().
+            watch_add(strncmp(path, "./", 2) ? path : path + 2, walk_after,
+                type == FTW_SL ? NULL : sb);
             break;
         }
     }
@@ -563,10 +587,10 @@ watch_paths(const char *patterns, int after)
         // A pattern matching nothing is fine, anything else going
         // wrong here means we are out of memory or similar.
         (void)memset(&found, 0, sizeof(found));
-        rc = glob(pattern, 0, NULL, &found);
+        rc = glob(pattern, GLOB_NOSORT, NULL, &found);
         INSIST(rc == 0 || rc == GLOB_NOMATCH, "glob(\"%s\")", pattern);
         for (i = 0; rc == 0 && i < found.gl_pathc; i++) {
-            watch_add(found.gl_pathv[i], after);
+            watch_add(found.gl_pathv[i], after, NULL);
         }
         globfree(&found);
     }
@@ -633,7 +657,7 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
             }
 
             // Trim whitespace from front and back of each printable word.
-            while (*(LASTCHAR(printable)) == ' ') {
+            while (*printable && *(LASTCHAR(printable)) == ' ') {
                 *(LASTCHAR(printable)) = '\0';
             }
             while (*printable == ' ') {
@@ -678,7 +702,7 @@ dbgsh(int argc, char *argv[])
                 }
             }
             INSIST(!setenv("PS1", EV_PS1, 1));
-            (void)execlp(basename(shell), shell, "--norc", "-i", (char *)NULL);
+            (void)execlp(shellbase, shell, "--norc", "-i", (char *)NULL);
             error(shell, strerror(errno)); // NOTREACHED
         }
         // Ignore the exit status of this debugging shell.
@@ -725,13 +749,19 @@ http_request(const char *server, const char *path)
 
     if ((srvfd = socket(result->ai_family, SOCK_STREAM, 0)) == -1) {
         error("socket()", strerror(errno));
+        freeaddrinfo(result);
         return EXIT_FAILURE;
     }
 
     if ((connect(srvfd, result->ai_addr, result->ai_addrlen) == -1)) {
         error("connect()", strerror(errno));
+        (void)close(srvfd);
+        freeaddrinfo(result);
         return EXIT_FAILURE;
     }
+
+    // The address is no longer needed once connected.
+    freeaddrinfo(result);
 
     if ((abspath = realpath(path, NULL))) {
         slash = (!stat(abspath, &stbuf) && S_ISDIR(stbuf.st_mode)) ? "/" : "";
@@ -742,6 +772,7 @@ http_request(const char *server, const char *path)
     } else {
         // Policy is to not print errors for nonexistent flush paths.
         // error(path, strerror(errno));
+        (void)close(srvfd);
         return EXIT_FAILURE;
     }
 
@@ -753,11 +784,15 @@ http_request(const char *server, const char *path)
 
     if (write(srvfd, request, strlen(request)) == -1) {
         error("write()", strerror(errno));
+        free(request);
+        (void)close(srvfd);
         return EXIT_FAILURE;
     }
 
     if (shutdown(srvfd, SHUT_WR) == -1) {
         error("shutdown()", strerror(errno));
+        free(request);
+        (void)close(srvfd);
         return EXIT_FAILURE;
     }
 
@@ -767,6 +802,8 @@ http_request(const char *server, const char *path)
     // buffer as an ersatz error message.
     if ((count = read(srvfd, readbuf, sizeof(readbuf) - 1)) == -1) {
         error("read()", strerror(errno));
+        free(request);
+        (void)close(srvfd);
         return EXIT_FAILURE;
     } else {
         char *nl, *ok;
@@ -776,12 +813,15 @@ http_request(const char *server, const char *path)
         ok = strstr(readbuf, " 206 ");
         if (!nl || !ok || ok > nl) {
             fputs(readbuf, stderr);
+            free(request);
+            (void)close(srvfd);
             return EXIT_FAILURE;
         }
     }
 
     if (close(srvfd) == -1) {
         error("close()", strerror(errno));
+        free(request);
         return EXIT_FAILURE;
     }
 
@@ -908,13 +948,22 @@ main(int argc, char *argv[])
         shell = "/bin/sh";
     }
 
+    // basename() is allowed to modify its argument and the shell
+    // name may come from the environment, so work from a copy.
+    {
+        char *shellcopy;
+
+        INSIST((shellcopy = strdup(shell)) != NULL);
+        shellbase = basename(shellcopy);
+    }
+
     INSIST(!clock_gettime(CLOCK_REALTIME, &starttime));
 
     if (ev2int(EV_XTRACE) && !ev2int(EV_TIMING)) {
         xtrace(argc, argv, NULL, NULL);
     }
 
-    // Optionally flush NFS before the recipe.
+    // Optionally flush NFS before the command.
     (void)nfs_flush(EV_PRE_FLUSH_PATHS);
 
     // Record the state (absence/presence and atime/mtime if present) of files.
@@ -957,28 +1006,38 @@ main(int argc, char *argv[])
             int hdr_fd;
 
             if ((db_dir = getenv(EV_DB))) {
-                INSIST(asprintf(&db_file, "%s/%ld.%09ld-%05d.csv",
-                    db_dir, starttime.tv_sec, starttime.tv_nsec, pid) != -1);
+                INSIST(asprintf(&db_file, "%s/%lld.%09ld-%05d.csv",
+                    db_dir, (long long)starttime.tv_sec,
+                    starttime.tv_nsec, pid) != -1);
                 INSIST((db_fp = fopen(db_file, "w")) != NULL);
                 free(db_file);
 
                 // Drop a file documenting the CSV format. The first few jobs might
                 // compete to create this but that doesn't matter if it's atomic.
                 INSIST(asprintf(&hdr_file, "%s/FORMAT.txt", db_dir) != -1);
-                INSIST((hdr_fd = open(hdr_file, O_CREAT | O_WRONLY, 0666)) != -1);
+                INSIST((hdr_fd =
+                    open(hdr_file, O_CREAT | O_TRUNC | O_WRONLY, 0666)) != -1);
                 INSIST((write(hdr_fd, CSV_HDR, strlen(CSV_HDR)) != -1));
                 (void)close(hdr_fd);
                 free(hdr_file);
             }
         } else {    // In the child.
             argv[0] = shell;
-            INSIST(execvp(basename(shell), argv) != -1);
+            INSIST(execvp(shellbase, argv) != -1);
         }
-        INSIST(wait(&status) != -1);
-        rc = WEXITSTATUS(status);
+        INSIST(waitpid(pid, &status, 0) != -1);
+        // A command killed by a signal must not look successful.
+        // Shells report such deaths as 128 plus the signal number.
+        rc = WIFSIGNALED(status) ? 128 + WTERMSIG(status) :
+            WEXITSTATUS(status);
+
+        // From here on a failed command's own status is reported
+        // rather than a generic failure, but an internal error must
+        // still be fatal even when the command succeeded.
+        insist_rc = rc ? rc : EXIT_FAILURE;
     }
 
-    // Optionally flush after the recipe.
+    // Optionally flush after the command.
     (void)nfs_flush(EV_POST_FLUSH_PATHS);
 
     if (db_fp || ev2int(EV_TIMING)) {
@@ -987,8 +1046,8 @@ main(int argc, char *argv[])
 
         INSIST(!clock_gettime(CLOCK_REALTIME, &endtime));
         elapsed_nsec =
-            ((endtime.tv_sec * NSECS_PER_SEC) + endtime.tv_nsec) -
-            ((starttime.tv_sec * NSECS_PER_SEC) + starttime.tv_nsec);
+            ((double)(endtime.tv_sec - starttime.tv_sec) * NSECS_PER_SEC) +
+            (endtime.tv_nsec - starttime.tv_nsec);
         (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", elapsed_nsec / NSECS_PER_SEC);
 
         if (ev2int(EV_TIMING)) {
@@ -1006,7 +1065,7 @@ main(int argc, char *argv[])
             while (*cmd == '\n') {
                 cmd++;
             }
-            while (*(endof(cmd) - 1) == '\n') {
+            while (*cmd && *(endof(cmd) - 1) == '\n') {
                 *(endof(cmd) - 1) = '\0';
             }
 
@@ -1035,15 +1094,15 @@ main(int argc, char *argv[])
             // The "pid" is our child (shell) and the ppid is our parent
             // while we insist on anonymity.
             INSIST(fprintf(db_fp, CSV_FMT,
-                starttime.tv_sec,
+                (long long)starttime.tv_sec,
                 starttime.tv_nsec,
                 pid,
                 getppid(),
                 rc,
                 elapsed_nsec / NSECS_PER_SEC,
-                summary.ru_utime.tv_sec,
+                (long long)summary.ru_utime.tv_sec,
                 (long)summary.ru_utime.tv_usec,
-                summary.ru_stime.tv_sec,
+                (long long)summary.ru_stime.tv_sec,
                 (long)summary.ru_stime.tv_usec,
                 loadbuf,
                 makelevel ? makelevel : "-",
