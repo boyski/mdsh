@@ -85,6 +85,7 @@ static int verbose;
 #define CSV_FMT "%ld.%09ld,%d,%d,%d,%f,%ld.%06ld,%ld.%06ld,%s,%s,%s,%s\n"
 
 #define DEFAULT_MARKER "==-=="
+
 #define SEP ":"
 
 #define endof(str) strchr(str, '\0')
@@ -150,6 +151,9 @@ If you don't know what .ONESHELL is, feel free to ignore this.\n");
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
 any of their states (created, removed, written, or accessed/read).\n\
+Each report is prefixed with the $(MAKELEVEL) of the reporting\n\
+process if running under GNU make because in a recursive make each\n\
+make in the chain may report the same change.\n\
 A pattern with no '/' in it is matched against the base name of\n\
 every file below the current directory so e.g. '*.o' finds object\n\
 files at any depth without needing '*/*.o' etc. A pattern which\n\
@@ -331,13 +335,16 @@ static void
 report(const char *path, const char *change)
 {
     char *marker = getenv(EV_MARKER);
-    char *mlev;
+    char *mlev = getenv("MAKELEVEL");
 
+    // Recursive make means the same file mod may be seen by
+    // multiple makes so the report says which level saw it.
+    // When $(MAKELEVEL) is not present the placeholder is used.
     marker = marker ? marker : DEFAULT_MARKER;
-    if (verbose && (mlev = getenv("MAKELEVEL"))) {
-        fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, marker, change, path);
+    if (mlev) {
+	fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, marker, change, path);
     } else {
-        fprintf(stderr, "%s: %s %s: %s", prog, marker, change, path);
+	fprintf(stderr, "%s: %s %s: %s", prog, marker, change, path);
     }
 
     if (verbose) {
@@ -445,18 +452,16 @@ watch_add(const char *path, int created)
 // Directories which are never descended into during the walk.
 static const char *prunedirs[] = {".git", ".svn"};
 
-// Pruning the walk requires FTW_ACTIONRETVAL which is a GNU
-// extension. Elsewhere (MacOS, *BSD, ...) the uninteresting
-// subtrees must be walked and their contents ignored instead.
+// Pruning the walk requires a GNU extension. Elsewhere the
+// uninteresting subtrees must still be walked and their contents
+// ignored instead.
 #ifdef FTW_ACTIONRETVAL
 #define WALK_FLAGS (FTW_PHYS | FTW_ACTIONRETVAL)
 #else
 #define WALK_FLAGS (FTW_PHYS)
 #define FTW_CONTINUE 0
 #define FTW_SKIP_SUBTREE 0
-#endif
 
-#ifndef FTW_ACTIONRETVAL
 // Is any directory component of this path one we skip over? Only
 // needed when the walk itself cannot be pruned.
 static int
