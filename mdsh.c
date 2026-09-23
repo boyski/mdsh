@@ -957,8 +957,6 @@ main(int argc, char *argv[])
         shellbase = basename(shellcopy);
     }
 
-    INSIST(!clock_gettime(CLOCK_REALTIME, &starttime));
-
     if (ev2int(EV_XTRACE) && !ev2int(EV_TIMING)) {
         xtrace(argc, argv, NULL, NULL);
     }
@@ -1000,6 +998,11 @@ main(int argc, char *argv[])
     {
         int status = EXIT_SUCCESS;
 
+        // Start the clock as late as possible and stop it as early
+        // as possible so that the elapsed time reflects the command
+        // itself rather than any work done on its behalf here.
+        INSIST(!clock_gettime(CLOCK_REALTIME, &starttime));
+
         INSIST((pid = fork()) >= 0);
         if (pid) {  // In the parent.
             char *db_dir, *db_file, *hdr_file;
@@ -1026,6 +1029,8 @@ main(int argc, char *argv[])
             INSIST(execvp(shellbase, argv) != -1);
         }
         INSIST(waitpid(pid, &status, 0) != -1);
+        INSIST(!clock_gettime(CLOCK_REALTIME, &endtime));
+
         // A command killed by a signal must not look successful.
         // Shells report such deaths as 128 plus the signal number.
         rc = WIFSIGNALED(status) ? 128 + WTERMSIG(status) :
@@ -1044,7 +1049,6 @@ main(int argc, char *argv[])
         char tbuf[256];
         double elapsed_nsec;
 
-        INSIST(!clock_gettime(CLOCK_REALTIME, &endtime));
         elapsed_nsec =
             ((double)(endtime.tv_sec - starttime.tv_sec) * NSECS_PER_SEC) +
             (endtime.tv_nsec - starttime.tv_nsec);
