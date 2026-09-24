@@ -1,0 +1,455 @@
+.\" Man page for mdsh, the Make Diagnosis Shell.
+.\" Render without installing anything:  man ./mdsh.1
+.\" Plain text:  man ./mdsh.1 | col -bx > mdsh.txt
+.\" Only standard man(7) macros are used: .TH .SH .SS .TP .PP .RS .RE .nf .fi
+.\"
+.TH MDSH 1 "2026-09-26" "mdsh" "User Commands"
+.
+.SH NAME
+mdsh \- the Make Diagnosis Shell, a diagnostic wrapper around /bin/sh
+.
+.SH SYNOPSIS
+.B mdsh
+.RI [ shell-arguments ...]
+.PP
+.B mdsh
+.BR \-h | \-\-help
+.PP
+.B mdsh
+.BR \-H | \-\-HELP
+.PP
+.B make
+.B SHELL=mdsh
+.RI [ MDSH_ *=...]
+.
+.SH DESCRIPTION
+.B mdsh
+is a shell wrapper designed for analyzing makefile behavior, though it
+can be used outside of
+.BR make .
+Its main use case is diagnosing problems in complex, often massively
+parallel, builds.
+.PP
+.B mdsh
+execs the underlying shell
+.RB ( /bin/sh
+by default) passing its
+.I argv
+through unparsed and unexamined, so apart from the extra fork and exec
+it behaves exactly like that shell. The single exception is that
+.BR \-h ,
+.BR \-\-help ,
+.B \-H
+and
+.B \-\-HELP
+print its own usage message instead of the shell's.
+.PP
+All of the added behavior is controlled by environment variables in the
+.B MDSH_*
+namespace, which leaves the option namespace free for the underlying
+shell. Those variables trigger actions before or after the shell runs:
+reporting file state changes, printing commands and timings, recording a
+.SM CSV
+database of every command, or dropping into an interactive debug shell.
+.PP
+Typically
+.B mdsh
+is selected by passing
+.B SHELL=mdsh
+to
+.BR make ,
+along with whichever
+.B MDSH_*
+variables are wanted. For example:
+.PP
+.RS
+.nf
+$ MDSH_TIMING=1 make SHELL=mdsh
+.fi
+.RE
+.PP
+prints every command run by every recipe with its run time. Note that
+SHELL must be overridden explicitly on the command line due to GNU make
+semantics while MDSH_* options can be found from the environment.
+.
+.SH OPTIONS
+.B mdsh
+has no options of its own; everything on the command line belongs to the
+shell. The following are the only arguments it interprets itself, and
+only when they appear as the last argument.
+.TP
+.BR \-h ", " \-\-help
+Print a usage message and exit.
+.TP
+.BR \-H ", " \-\-HELP
+Print a usage message (including advanced and experimental options) and
+exit.
+.
+.SH ENVIRONMENT
+.SS Watching files
+.TP
+.B MDSH_PATHS
+A colon-separated list of glob patterns naming files to watch. After the
+command finishes any change of state is reported. See
+.B REPORTS
+below.
+.IP
+A pattern containing no
+.B /
+is matched against the base name of every file below the current
+directory, so
+.B '*.o'
+finds object files at any depth without needing
+.BR '*/*.o' .
+A pattern which does contain a
+.B /
+is expanded as an ordinary glob relative to the current directory.
+Directories are reported only when created or removed, never when an
+entry within them changes. The
+.B .git
+and
+.B .svn
+directories are never descended into.
+.TP
+.B MDSH_ABSPATH
+If set (nonzero), report all
+.B MDSH_PATHS
+changes by absolute path. See
+.B REPORTS
+for what is reported otherwise.
+.TP
+.B MDSH_MARKER
+An optional string added to report lines to aid later grepping. The
+default marker is
+.BR ==\-== .
+.
+.SS Printing commands
+.TP
+.B MDSH_XTRACE
+If set, print each shell command to stderr much as
+.B "set \-x"
+would.
+.TP
+.B MDSH_TIMING
+Like
+.B MDSH_XTRACE
+but the command is printed with its run time. Useful for profiling a
+build to find the long poles. After running
+.B make
+with this enabled, plus
+.B \-Orecurse
+for recursive parallel builds, sort recipes by run time with something
+like:
+.PP
+.RS
+.nf
+$ grep MDSH_TIMING: sample.log | sort \-n \-k3,3
+.fi
+.RE
+.IP
+Timings are also recorded by
+.BR MDSH_DB .
+.TP
+.B MDSH_PWD
+If set, print the current working directory before each shell command.
+.TP
+.B MDSH_VERBOSE
+If set (nonzero), print the working directory and the command line along
+with each
+.B MDSH_PATHS
+report.
+.TP
+.B MDSH_NOFIXUP
+By default
+.B mdsh
+tidies whitespace in commands before printing them, since make recipes
+often expand to long, hard to read strings containing runs of spaces and
+embedded newlines. Newlines and tabs become spaces, runs of spaces are
+squeezed to one, and leading and trailing spaces are dropped. This flag
+suppresses that. Note that the tidied form is for reading only; no
+commitment is made that it can be fed back to a shell.
+.
+.SS Recording a database
+.TP
+.B MDSH_DB
+If present, names a writable directory. Each shell command drops one
+file there, named for its start time in nanoseconds and its pid,
+summarizing the command in
+.SM CSV
+format. See
+.B "CSV DATABASE"
+below.
+.
+.SS Debugging interactively
+.TP
+.B MDSH_CMDRE
+A regular expression compared against the shell command. On a match, an
+interactive debug shell is invoked before the command runs.
+.TP
+.B MDSH_DBGSH
+If set and the underlying shell exits with a failure status, run an
+interactive shell to help analyze the failing state.
+.IP
+Both of the above can run into trouble under
+.BR "make \-j" ,
+which generally closes stdin. Interactive shells need stdin and stdout
+connected to the terminal.
+.TP
+.B MDSH_SHELL
+Override the default shell
+.RB [ /bin/sh ]
+which
+.B mdsh
+execs. This does not tell
+.B make
+which shell to use; that is what
+.B SHELL=mdsh
+does.
+.
+.SS Flushing NFS caches (experimental)
+.TP
+.BR MDSH_PRE_FLUSH_PATHS ", " MDSH_POST_FLUSH_PATHS
+Colon-separated lists of paths on which to attempt NFS cache flushing
+before or after the command runs. The first thing done with each listed
+path, if it is a directory, is to open and close it, which may flush the
+filehandle cache.
+.TP
+.B MDSH_HTTP_SERVER
+The name of an HTTP server with read access to the listed files. A GET
+request is issued for each path in
+.BR MDSH_PRE_FLUSH_PATHS ,
+file or directory, which is said to force dirty NFS caches for that path
+to be flushed.
+.IP
+NFS cache flushing is a complex topic and the situation varies by
+protocol version, server vendor and so on. Multiple techniques are
+supported, in both a pull model (flush before reading) and a push model
+(flush after writing), to allow experimental tuning. A linker recipe
+might flush the directory holding its object files with
+.BR MDSH_PRE_FLUSH_PATHS=$(@D) ,
+or flush
+.B $^
+directly. Pull is generally thought more correct than push, but having a
+compile recipe push-flush its target with
+.B MDSH_POST_FLUSH_PATHS=$@
+may be worth trying.
+.\"
+.\" Undocumented on purpose, pending further consideration:
+.\"
+.\" MDSH_BASEDIR   exported by the first mdsh to run and inherited by the
+.\"                rest; see REPORTS. Can be set by hand to pin reporting
+.\"                to a chosen directory but this is not yet advertised.
+.\" MDSH_EFLAG     on command failure, send SIGINT to the parent process.
+.\" MDSH_XTEVS     colon-separated list of environment variable names to
+.\"                print along with each traced command.
+.
+.SH REPORTS
+A state change reported through
+.B MDSH_PATHS
+looks like this:
+.PP
+.RS
+.nf
+mdsh: [1] ==\-== CREATED: sub/foo.o
+.fi
+.RE
+.PP
+The fields are the program name, the value of
+.B $(MAKELEVEL)
+in square brackets if present, the marker, the state change
+and the path. The level is present only when running under
+.BR make ,
+and is included because in a recursive build each
+.B make
+in the chain may report the same change. State changes are:
+.TP
+.B CREATED
+The path did not exist before the command and does now.
+.TP
+.B REMOVED
+The path existed before the command and does not now.
+.TP
+.B MODIFIED
+The modification time advanced.
+.TP
+.B ACCESSED
+The access time advanced.
+.PP
+Paths are reported relative to the directory of the first
+.B mdsh
+in the process tree so a file keeps the same name at every level of a
+recursive build. Files outside that directory are reported by absolute
+path as are all files when
+.B MDSH_ABSPATH
+is set.
+.PP
+On Linux, mount points normally carry the
+.B relatime
+option under which a read updates the access time only if it is not
+already later than the modification time. To make reads visible,
+.B mdsh
+pushes the access time of each watched file back behind its modification
+time before the command runs.
+Systems that record every read, such as macOS, need none of
+this and are left untouched.
+.
+.SH "CSV DATABASE"
+If
+.B MDSH_DB
+is provided, each command writes one
+.B .csv
+file into that directory whose fields are:
+.PP
+.RS
+.nf
+START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,
+LOAD AVG,MAKELEVEL,PWD,COMMAND
+.fi
+.RE
+.PP
+A
+.B FORMAT.txt
+file describing that format is written to the same directory.
+.B LOAD AVG
+is the one-minute system load average when the command finished or
+.B \-
+if it could not be determined.
+.B MAKELEVEL
+is
+.B \-
+when not running under
+.BR make .
+.B COMMAND
+must be last because it has unbounded length and may contain unquoted commas.
+Elapsed time covers the command itself; work done by
+.B mdsh
+on its behalf falls outside the measurement.
+.
+.SH "EXIT STATUS"
+Like any shell,
+.B mdsh
+exits with the status of the command it ran. A command killed by a
+signal yields 128 plus the signal number, as a shell would report it.
+.PP
+An internal error in
+.B mdsh
+is always fatal. Once the command has run its status is reported in
+preference to a generic failure, so a failed command's own status
+survives; if the command succeeded, the internal error is reported as
+.B EXIT_FAILURE
+instead.
+.
+.SH EXAMPLES
+Run in sequence:
+.PP
+.RS
+.nf
+$ MDSH_PATHS=foo:bar mdsh \-c 'touch foo'
+mdsh: ==\-== CREATED: foo
+
+$ MDSH_PATHS=foo:bar mdsh \-c 'touch foo bar'
+mdsh: ==\-== MODIFIED: foo
+mdsh: ==\-== CREATED: bar
+
+$ MDSH_PATHS=foo:bar mdsh \-c 'grep blah foo bar'
+mdsh: ==\-== ACCESSED: foo
+mdsh: ==\-== ACCESSED: bar
+
+$ MDSH_PATHS=foo:bar MDSH_VERBOSE=1 mdsh \-c 'rm \-f foo bar'
+mdsh: ==\-== REMOVED: foo [/bin/sh \-c rm \-f foo bar]
+mdsh: ==\-== REMOVED: bar [/bin/sh \-c rm \-f foo bar]
+
+$ MDSH_TIMING=1 mdsh \-c 'sleep 2.4'
++ [MDSH_TIMING: 2.4s] mdsh \-c 'sleep 2.4'
+.fi
+.RE
+.PP
+Watch every object file in a tree, however deep:
+.PP
+.RS
+.nf
+$ MDSH_PATHS='*.o' make \-j12 SHELL=mdsh
+.fi
+.RE
+.PP
+Real-life usage via make:
+.PP
+.RS
+.nf
+$ MDSH_PATHS=foobar MDSH_VERBOSE=1 make \-j12 SHELL=mdsh ...
+
+$ make SHELL=mdsh MDSH_DBGSH=1 ...
+
+$ rm \-rf /tmp/db; mkdir /tmp/db; MDSH_DB=/tmp/db make SHELL=mdsh ...
+.fi
+.RE
+.
+.SH "MAKE AND .ONESHELL"
+.B make
+keeps a compiled-in list of shells it knows to be POSIX-conformant.
+Unfortunately
+.B mdsh
+is not on that list even though it wraps
+.B /bin/sh
+and thus effectively is a POSIX shell. Not knowing this can confuse
+.BR make ,
+particularly in
+.B .ONESHELL
+mode. The workaround is to invoke
+.B mdsh
+under a name that IS on the list. A symlink
+.B "rksh \-> mdsh"
+is probably the best choice, since
+.B rksh
+is recognized but almost nobody uses it as an actual shell; it may be
+simplest to always use that name and avoid surprises.
+.
+.SH FILES
+.TP
+.B FORMAT.txt
+Written into the
+.B MDSH_DB
+directory, holding the
+.SM CSV
+header line.
+.TP
+.B mdsh\-csv
+Companion script which summarizes and sorts an
+.B MDSH_DB
+directory.
+.
+.SH NOTES
+The usage message printed by
+.B \-\-help
+and
+.B \-\-HELP
+is generated from the source and is the most complete and up-to-date
+documentation.
+.PP
+A basename pattern in
+.B MDSH_PATHS
+requires
+.B mdsh
+to walk the directory tree twice per command, once before and once after,
+which may have some measurable time cost, but
+.B mdsh
+is intended for diagnostic use, not production builds. This overhead is
+not included in timing measurements.
+.
+.SH "SEE ALSO"
+.BR make (1),
+.BR sh (1),
+.BR glob (7),
+.BR fnmatch (3),
+.BR nftw (3)
+.PP
+NFS cache flushing background: http://tss.iki.fi/nfs\-coding\-howto.html
+.
+.SH AUTHOR
+David Boyce
+.
+.SH COPYRIGHT
+Copyright \(co 2018\-2026 David Boyce. This program is free software
+under the terms of the GNU General Public License, version 3 or, at your
+option, any later version. There is NO WARRANTY, to the extent permitted
+by law.

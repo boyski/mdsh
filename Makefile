@@ -33,7 +33,7 @@ demo: mdsh
 # exercise HTTP cache flushing. The web server would need read
 # access to files in local NFS.
 .PHONY: test
-test: mdsh | demo
+test: mdsh demo
 	############ Testing $< NFS flushing ... ############
 	$(strip MDSH_VERBOSE=1 MDSH_PRE_FLUSH_PATHS=. \
 	  ./$< -c date)
@@ -54,10 +54,16 @@ dbtest:
 	sleep 2
 	date
 
+# Potential man page checks:
+# groff -man -ww -z mdsh.1
+# mandoc -T lint mdsh.1
+# man --warnings ./mdsh.1
+
 .PHONY: install
 install: mdsh := $(shell bash -c "type -fp mdsh")
 install: all
 	$(if $(mdsh),cp -a mdsh $(mdsh))
+	$(if $(mdsh),cp -a mdsh.1 $(mdsh:bin/mdsh=share/man/man1))
 
 .PHONY: clean
 clean: cleanups := $(wildcard *.o *.dSYM $(TARGETS) $(MDSH_DB))

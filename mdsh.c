@@ -329,7 +329,7 @@ $ [repeat previous command]\n\
 (no state change messages, the files are already gone)\n\
 \n\
 $ MDSH_TIMING=1 %s -c 'sleep 2.4'\n\
-- %s -c sleep 2.4 (2.4s)\n\
++ [MDSH_TIMING: 2.4s] %s -c 'sleep 2.4'\n\
 \n\
 Real-life usage via make:\n\n\
 $ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=%s ...\n\
