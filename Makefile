@@ -12,8 +12,9 @@ space := $(empty) $(empty)
 .PHONY: all
 all: $(TARGETS)
 
+#extra_warnings := -fsanitize=address,undefined -Weverything
 %: %.c
-	$(CC) -g -o $@ -Wall -Wextra $<
+	$(strip $(CC) -g -o $@ -Wall -Wextra -pedantic $(extra_warnings) $<)
 
 .PHONY: demo
 demo: mdsh_temps := foo* bar* baz*

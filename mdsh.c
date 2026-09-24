@@ -41,7 +41,7 @@
 #include <sys/wait.h>
 
 typedef struct {
-    const char *path;
+    char *path;
     struct timespec times[2];   // atime and mtime before the command ran
     int existed;                // path could be stat-ed before the command
     int created;                // path first matched after the command
@@ -63,6 +63,15 @@ static int fixup = 1;
 static int insist_rc = EXIT_FAILURE;
 static int verbose;
 
+// The top-level mdsh exports its cwd as MDSH_BASEDIR; child mdsh
+// processes will inherit that value and leave it alone.
+// This allows files under MDSH_BASEDIR to be consistently reported
+// relative to it while files outside the tree use absolute paths.
+// The effect is to allow a file such as xx/yy/zz.o to be reported
+// with the same name at every level of a recursive make.
+static char *basedir;
+static size_t baselen;
+
 // MacOS and Linux use different struct timespec names.
 #ifdef __APPLE__
 #define st_atim st_atimespec
@@ -79,6 +88,8 @@ static int verbose;
 #define EV_POST_FLUSH_PATHS PFX "_POST_FLUSH_PATHS"
 #define EV_HTTP_SERVER PFX "_HTTP_SERVER"
 #define EV_XTEVS PFX "_XTEVS"
+#define EV_ABSPATH PFX "_ABSPATH"
+#define EV_BASEDIR PFX "_BASEDIR"
 #define EV_PATHS PFX "_PATHS"
 #define EV_MARKER PFX "_MARKER"
 #define EV_NOFIXUP PFX "_NOFIXUP"
@@ -105,20 +116,15 @@ static int verbose;
 #define TIME_GT(left, right) (((left).tv_sec > (right).tv_sec) || \
         ((left).tv_sec == (right).tv_sec && (left).tv_nsec > (right).tv_nsec))
 
-// Get first argument of __VA_ARGS__ if any.
-#define INSIST_FIRST_ARG_(...) INSIST_FIRST_HELPER_(__VA_ARGS__, throwaway)
-#define INSIST_FIRST_HELPER_(first, ...) "" #first
-
 // Print caller function name, file name, line_number, error message
-// and optional supporting arguments. Exit with failure code.
-// Supporting arguments are a printf() format string followed
-// by respective printf() arguments.
+// and the supporting text. Exit with failure code. The supporting
+// arguments are a printf() format string followed by respective
+// printf() arguments, already carrying their own separator.
 #define INSIST_DIE_(err_msg, ...) do { \
     fprintf(stderr, "%s: Error: %s() %s:%d [%s]", \
     prog, __func__, __FILE__, __LINE__, err_msg); \
     if (errno) fprintf(stderr, ": %s", strerror(errno)); \
-    if (strcmp(INSIST_FIRST_ARG_(__VA_ARGS__), "")) \
-        fprintf(stderr, ": " __VA_ARGS__); \
+    fprintf(stderr, __VA_ARGS__); \
     fputc('\n', stderr); \
     fflush(stderr); \
     exit(insist_rc); \
@@ -127,15 +133,30 @@ static int verbose;
 // Note that INSIST_DIE_ exits with insist_rc rather than a fixed
 // code, see its declaration above.
 
-// Check the condition to be true, otherwise call INSIST_DIE_ above with
-// condition as string and optional supporting arguments.
-#define INSIST(cond, ...) do { \
-    if (!(cond)) {INSIST_DIE_(#cond, ##__VA_ARGS__);} \
+// Check the condition to be true, otherwise call INSIST_DIE_ above
+// with the condition as a string. Use INSIST_MSG below to add
+// supporting text. Neither macro is called with an empty variadic
+// argument since ISO C only allows that from C23 onward.
+#define INSIST(cond) do { \
+    if (!(cond)) {INSIST_DIE_(#cond, "%s", "");} \
+} while (0)
+
+// As INSIST above plus a printf() style format string and its
+// arguments, printed after the condition.
+#define INSIST_MSG(cond, ...) do { \
+    if (!(cond)) {INSIST_DIE_(#cond, ": " __VA_ARGS__);} \
 } while (0)
 
 #define LASTCHAR(str) (strrchr(str, '\0') - 1)
 
-static void
+// C11 has _Noreturn but this spelling is accepted in any mode.
+#ifdef __GNUC__
+#define NORETURN_ __attribute__((noreturn))
+#else
+#define NORETURN_
+#endif
+
+static NORETURN_ void
 usage(int rc, int helplevel)
 {
     FILE *f = (rc == EXIT_SUCCESS) ? stdout : stderr;
@@ -175,6 +196,10 @@ does contain a '/' is expanded as a normal glob relative to the\n\
 current directory. Directories are reported only when created or\n\
 removed, never when an entry within them changes.\n",
         EV_PATHS);
+
+    fprintf(f, "\n\
+%s: if set (nonzero), %s pathnames are made absolute.\n",
+        EV_ABSPATH, EV_PATHS);
 
     fprintf(f, "\n\
 %s: if set (nonzero), the command line will be printed\n\
@@ -342,7 +367,7 @@ error(const char *term, const char *msg)
 static int
 pathcmp(const void *pa, const void *pb)
 {
-    return strcmp(((pathtimes_s *)pa)->path, ((pathtimes_s *)pb)->path);
+    return strcmp(((const pathtimes_s *)pa)->path, ((const pathtimes_s *)pb)->path);
 }
 
 static void
@@ -350,6 +375,26 @@ report(const char *path, const char *change)
 {
     char *marker = getenv(EV_MARKER);
     char *mlev = getenv("MAKELEVEL");
+    static char *cwd;   // Ours never changes, so look it up once.
+    char *abspath = NULL;
+
+    // Paths arrive relative to our own working directory, which
+    // names the same file differently at each level of a recursive
+    // make. Reporting below the base dir fixes that, and anything
+    // outside the base dir has no such name so it stays absolute.
+    if (*path != '/') {
+        if (!cwd) {
+            INSIST((cwd = getcwd(NULL, 0)) != NULL);
+        }
+        INSIST(asprintf(&abspath, "%s/%s", cwd,
+            strncmp(path, "./", 2) ? path : path + 2) != -1);
+        path = abspath;
+    }
+
+    if (!ev2int(EV_ABSPATH) && !strncmp(path, basedir, baselen) &&
+            path[baselen] == '/') {
+        path += baselen + 1;
+    }
 
     // Recursive make means the same file mod could be seen by
     // multiple makes so the report shows GNU make's $(MAKELEVEL)
@@ -362,12 +407,12 @@ report(const char *path, const char *change)
     }
 
     if (verbose) {
-        char *cwd;
+        char *curdir;
         int i;
 
-        INSIST((cwd = getcwd(NULL, 0)) != NULL);
-        fprintf(stderr, " [%s] (%s ", cwd, shell);
-        free(cwd);
+        INSIST((curdir = getcwd(NULL, 0)) != NULL);
+        fprintf(stderr, " [%s] (%s ", curdir, shell);
+        free(curdir);
         for (i = 1; argv_[i]; i++) {
             if (strpbrk(argv_[i], " \t")) {
                 fprintf(stderr, "'%s'", argv_[i]);
@@ -383,12 +428,13 @@ report(const char *path, const char *change)
 
     fputc('\n', stderr);
     INSIST(!fflush(stderr));
+    free(abspath);
 }
 
 static void
 watch_walk(const void *nodep, const VISIT which, const int depth)
 {
-    pathtimes_s *pt = *((pathtimes_s **)nodep);
+    pathtimes_s *pt = *((pathtimes_s * const *)nodep);
     struct stat stbuf;
 
     (void)depth; // don't need this
@@ -438,7 +484,7 @@ watch_add(const char *path, int created, const struct stat *sb)
     INSIST((node = (pathtimes_s **)
         tsearch((const void *)pt, &stash, pathcmp)) != NULL);
     if (*node != pt) {
-        free((void *)pt->path);
+        free(pt->path);
         free(pt);
         return;
     }
@@ -588,7 +634,7 @@ watch_paths(const char *patterns, int after)
         // wrong here means we are out of memory or similar.
         (void)memset(&found, 0, sizeof(found));
         rc = glob(pattern, GLOB_NOSORT, NULL, &found);
-        INSIST(rc == 0 || rc == GLOB_NOMATCH, "glob(\"%s\")", pattern);
+        INSIST_MSG(rc == 0 || rc == GLOB_NOMATCH, "glob(\"%s\")", pattern);
         for (i = 0; rc == 0 && i < found.gl_pathc; i++) {
             watch_add(found.gl_pathv[i], after, NULL);
         }
@@ -599,7 +645,7 @@ watch_paths(const char *patterns, int after)
     // Symlinks are not followed in order to avoid cycles.
     if (nbasepats) {
         walk_after = after;
-        INSIST(nftw(".", watch_visit, 16, WALK_FLAGS) != -1, "%s", EV_PATHS);
+        INSIST_MSG(nftw(".", watch_visit, 16, WALK_FLAGS) != -1, "%s", EV_PATHS);
         free(basepats);
         basepats = NULL;
         nbasepats = 0;
@@ -636,7 +682,7 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
     }
     for (i = 0; i < argc; i++) {
         char *original, *printable;
-        int j;
+        int j, k;
 
         // The handling of whitespace and quoting here is rudimentary
         // but it's only for visual purposes. No commitment is made
@@ -653,6 +699,8 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
                     case '\n': case '\t':
                         printable[j] = ' ';
                         break;
+		    default:
+                        break;
                 }
             }
 
@@ -663,6 +711,14 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
             while (*printable == ' ') {
                 printable++;
             }
+
+            // Squeeze runs of multiple consecutive spaces.
+            for (j = 0, k = 0; printable[j]; j++) {
+                if (printable[j] != ' ' || (k && printable[k - 1] != ' ')) {
+                    printable[k++] = printable[j];
+                }
+            }
+            printable[k] = '\0';
         }
 
         if (strchr(printable, ' ')) {
@@ -730,7 +786,8 @@ http_request(const char *server, const char *path)
 {
     struct addrinfo *result, hints;
     struct stat stbuf;
-    int retval, srvfd, count;
+    int retval, srvfd;
+    ssize_t count;
     char *abspath, *slash, *request;
     char readbuf[1024];
 
@@ -935,6 +992,26 @@ main(int argc, char *argv[])
     fixup = ev2int(EV_NOFIXUP) ? 0 : 1;
     verbose = ev2int(EV_VERBOSE); // Global verbosity flag.
 
+    // The first mdsh in a process tree fixes the base dir.
+    // An inherited value is left alone.
+    if ((basedir = getenv(EV_BASEDIR))) {
+        char *resolved;
+
+        if ((resolved = realpath(basedir, NULL))) {
+            basedir = resolved;
+        } else {
+            INSIST((basedir = strdup(basedir)) != NULL);
+        }
+    } else {
+        INSIST((basedir = getcwd(NULL, 0)) != NULL);
+        INSIST(!setenv(EV_BASEDIR, basedir, 1));
+    }
+
+    // A trailing slash would break the prefix comparison later.
+    for (baselen = strlen(basedir); baselen > 1 && basedir[baselen - 1] == '/';) {
+        basedir[--baselen] = '\0';
+    }
+
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
 
@@ -1051,7 +1128,7 @@ main(int argc, char *argv[])
 
         elapsed_nsec =
             ((double)(endtime.tv_sec - starttime.tv_sec) * NSECS_PER_SEC) +
-            (endtime.tv_nsec - starttime.tv_nsec);
+            (double)(endtime.tv_nsec - starttime.tv_nsec);
         (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", elapsed_nsec / NSECS_PER_SEC);
 
         if (ev2int(EV_TIMING)) {
