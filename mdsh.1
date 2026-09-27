@@ -35,7 +35,7 @@ execs the underlying shell
 .RB ( /bin/sh
 by default) passing its
 .I argv
-through unparsed and unexamined, so apart from the extra fork and exec
+through unparsed and unexamined, so apart from the extra fork/exec
 it behaves exactly like that shell. The single exception is that
 .BR \-h ,
 .BR \-\-help ,
@@ -46,7 +46,7 @@ print its own usage message instead of the shell's.
 .PP
 All of the added behavior is controlled by environment variables in the
 .B MDSH_*
-namespace, which leaves the option namespace free for the underlying
+namespace, thus leaving the option namespace free for the underlying
 shell. Those variables trigger actions before or after the shell runs:
 reporting file state changes, printing commands and timings, recording a
 .SM CSV
@@ -69,14 +69,14 @@ $ MDSH_TIMING=1 make SHELL=mdsh
 .RE
 .PP
 prints every command run by every recipe with its run time. Note that
-SHELL must be overridden explicitly on the command line due to GNU make
-semantics while MDSH_* options can be found from the environment.
+SHELL must be overridden explicitly according to GNU make semantics while
+MDSH_* options can be placed in the environment.
 .
 .SH OPTIONS
 .B mdsh
-has no options of its own; everything on the command line belongs to the
-shell. The following are the only arguments it interprets itself, and
-only when they appear as the last argument.
+has no options of its own; everything passed on the command line belongs to
+the shell. The following are the only arguments it interprets itself, and
+only when they appear as the lone argument:
 .TP
 .BR \-h ", " \-\-help
 Print a usage message and exit.
@@ -89,9 +89,11 @@ exit.
 .SS Watching files
 .TP
 .B MDSH_PATHS
-A colon-separated list of glob patterns naming files to watch. After the
+A colon-separated list of glob patterns naming files to watch. When the
 command finishes any change of state is reported. See
 .B REPORTS
+and
+.B EXAMPLES
 below.
 .IP
 A pattern containing no
@@ -105,28 +107,28 @@ A pattern which does contain a
 .B /
 is expanded as an ordinary glob relative to the current directory.
 Directories are reported only when created or removed, never when an
-entry within them changes. The
-.B .git
-and
-.B .svn
-directories are never descended into.
+entry within them changes. Directories matched by
+.B MDSH_IGNORE
+are not descended into.
 .TP
-.B MDSH_ABSPATH
-If set (nonzero), report all
+.B MDSH_IGNORE
+A colon-separated list of glob patterns, defaulting to
+.BR .git:.svn .
+The
 .B MDSH_PATHS
-changes by absolute path. See
-.B REPORTS
-for what is reported otherwise.
-.TP
-.B MDSH_MARKER
-An optional string added to report lines to aid later grepping. The
-default marker is
-.BR ==\-== .
+tree walk never descends into a directory whose base name matches
+one of them, so e.g.
+.B '.git:.svn:*.dSYM'
+also skips the debug symbol bundles left by the macOS linker. An
+empty value skips nothing. This applies only to the walk, so a
+pattern containing a
+.B /
+still reaches inside such a directory.
 .
 .SS Printing commands
 .TP
 .B MDSH_XTRACE
-If set, print each shell command to stderr much as
+If set (nonzero), print each shell command to stderr much as
 .B "set \-x"
 would.
 .TP
@@ -138,8 +140,8 @@ build to find the long poles. After running
 .B make
 with this enabled, plus
 .B \-Orecurse
-for recursive parallel builds, sort recipes by run time with something
-like:
+for recursive parallel builds, recipes can be sorted by run time
+with something like:
 .PP
 .RS
 .nf
@@ -152,22 +154,53 @@ Timings are also recorded by
 .TP
 .B MDSH_PWD
 If set, print the current working directory before each shell command.
+.
+.SS Output control
+The variables in this section do nothing on their own, they only modify
+the output of a feature enabled elsewhere.
+.TP
+.B MDSH_ABSPATH
+If set, report all
+.B MDSH_PATHS
+changes by absolute path. See
+.B REPORTS
+for what is reported otherwise.
+.TP
+.B MDSH_MARKER
+A string added to
+.B MDSH_PATHS
+report lines and to
+.B MDSH_XTRACE
+and
+.B MDSH_TIMING
+traces, to aid later grepping. The default marker is
+.BR =\-= .
 .TP
 .B MDSH_VERBOSE
-If set (nonzero), print the working directory and the command line along
+If set, print the working directory and the command line along
 with each
 .B MDSH_PATHS
-report.
+report. It also makes the NFS cache flushing described below report each
+of its steps.
 .TP
 .B MDSH_NOFIXUP
 By default
 .B mdsh
-tidies whitespace in commands before printing them, since make recipes
-often expand to long, hard to read strings containing runs of spaces and
-embedded newlines. Newlines and tabs become spaces, runs of spaces are
-squeezed to one, and leading and trailing spaces are dropped. This flag
-suppresses that. Note that the tidied form is for reading only; no
-commitment is made that it can be fed back to a shell.
+tidies whitespace in commands since build recipes often expand to strings
+full of line continuations, tabs, and runs of spaces. Whitespace that has
+no effect on shell semantics is simplified away. Note that the cleaned-up
+form is intended for reading only; no commitment is made that it can be
+fed back to a shell. Text passed to the shell is never modified \- this
+cleanup applies only to
+.B mdsh
+output.
+.B MDSH_NOFIXUP
+suppresses it both in
+.B MDSH_XTRACE
+output and the
+.B MDSH_DB
+database, except that the database still replaces newlines with
+semicolons to keep records on one line.
 .
 .SS Recording a database
 .TP
@@ -189,38 +222,43 @@ interactive debug shell is invoked before the command runs.
 .B MDSH_DBGSH
 If set and the underlying shell exits with a failure status, run an
 interactive shell to help analyze the failing state.
-.IP
-Both of the above can run into trouble under
+.PP
+These will typically have the effect of pausing the build until the
+shell exits. They can run into trouble under
 .BR "make \-j" ,
-which generally closes stdin. Interactive shells need stdin and stdout
-connected to the terminal.
+which generally closes stdin, or if output is redirected. Interactive
+shells need stdin and stdout connected to the terminal.
+.
+.SS Choosing the shell
 .TP
 .B MDSH_SHELL
 Override the default shell
 .RB [ /bin/sh ]
 which
 .B mdsh
-execs. This does not tell
+execs. This doesn't tell
 .B make
-which shell to use; that is what
+what shell to use; that's what
 .B SHELL=mdsh
-does.
+does. This tells
+.B mdsh
+what shell to relay to.
 .
 .SS Flushing NFS caches (experimental)
 .TP
 .BR MDSH_PRE_FLUSH_PATHS ", " MDSH_POST_FLUSH_PATHS
 Colon-separated lists of paths on which to attempt NFS cache flushing
 before or after the command runs. The first thing done with each listed
-path, if it is a directory, is to open and close it, which may flush the
-filehandle cache.
+path, if it's a directory, is to open and close it which should flush
+the filehandle cache.
 .TP
 .B MDSH_HTTP_SERVER
 The name of an HTTP server with read access to the listed files. A GET
 request is issued for each path in
 .BR MDSH_PRE_FLUSH_PATHS ,
-file or directory, which is said to force dirty NFS caches for that path
+file or directory. This is said to force dirty NFS caches for that path
 to be flushed.
-.IP
+.PP
 NFS cache flushing is a complex topic and the situation varies by
 protocol version, server vendor and so on. Multiple techniques are
 supported, in both a pull model (flush before reading) and a push model
@@ -234,13 +272,13 @@ compile recipe push-flush its target with
 .B MDSH_POST_FLUSH_PATHS=$@
 may be worth trying.
 .\"
-.\" Undocumented on purpose, pending further consideration:
+.\" Undocumented on purpose pending further consideration:
 .\"
 .\" MDSH_BASEDIR   exported by the first mdsh to run and inherited by the
 .\"                rest; see REPORTS. Can be set by hand to pin reporting
 .\"                to a chosen directory but this is not yet advertised.
 .\" MDSH_EFLAG     on command failure, send SIGINT to the parent process.
-.\" MDSH_XTEVS     colon-separated list of environment variable names to
+.\" MDSH_XTEVS     colon-separated list of environment-variable names to
 .\"                print along with each traced command.
 .
 .SH REPORTS
@@ -250,15 +288,15 @@ looks like this:
 .PP
 .RS
 .nf
-mdsh: [1] ==\-== CREATED: sub/foo.o
+mdsh: [1] =\-= CREATED: sub/foo.o
 .fi
 .RE
 .PP
 The fields are the program name, the value of
 .B $(MAKELEVEL)
-in square brackets if present, the marker, the state change
+in square brackets if present, the marker string, the state change
 and the path. The level is present only when running under
-.BR make ,
+.B make
 and is included because in a recursive build each
 .B make
 in the chain may report the same change. State changes are:
@@ -279,7 +317,7 @@ Paths are reported relative to the directory of the first
 .B mdsh
 in the process tree so a file keeps the same name at every level of a
 recursive build. Files outside that directory are reported by absolute
-path as are all files when
+path, as are all files when
 .B MDSH_ABSPATH
 is set.
 .PP
@@ -320,7 +358,10 @@ is
 when not running under
 .BR make .
 .B COMMAND
-must be last because it has unbounded length and may contain unquoted commas.
+must be last because it has unbounded length and may contain unquoted commas,
+and is tidied as described under
+.B MDSH_NOFIXUP
+above.
 Elapsed time covers the command itself; work done by
 .B mdsh
 on its behalf falls outside the measurement.
@@ -340,24 +381,26 @@ survives; if the command succeeded, the internal error is reported as
 instead.
 .
 .SH EXAMPLES
-Run in sequence:
+These commands to be run in sequence:
 .PP
 .RS
 .nf
+$ rm -f foo bar
+
 $ MDSH_PATHS=foo:bar mdsh \-c 'touch foo'
-mdsh: ==\-== CREATED: foo
+mdsh: =\-= CREATED: foo
 
 $ MDSH_PATHS=foo:bar mdsh \-c 'touch foo bar'
-mdsh: ==\-== MODIFIED: foo
-mdsh: ==\-== CREATED: bar
+mdsh: =\-= MODIFIED: foo
+mdsh: =\-= CREATED: bar
 
 $ MDSH_PATHS=foo:bar mdsh \-c 'grep blah foo bar'
-mdsh: ==\-== ACCESSED: foo
-mdsh: ==\-== ACCESSED: bar
+mdsh: =\-= ACCESSED: foo
+mdsh: =\-= ACCESSED: bar
 
 $ MDSH_PATHS=foo:bar MDSH_VERBOSE=1 mdsh \-c 'rm \-f foo bar'
-mdsh: ==\-== REMOVED: foo [/bin/sh \-c rm \-f foo bar]
-mdsh: ==\-== REMOVED: bar [/bin/sh \-c rm \-f foo bar]
+mdsh: =\-= REMOVED: foo [/bin/sh \-c rm \-f foo bar]
+mdsh: =\-= REMOVED: bar [/bin/sh \-c rm \-f foo bar]
 
 $ MDSH_TIMING=1 mdsh \-c 'sleep 2.4'
 + [MDSH_TIMING: 2.4s] mdsh \-c 'sleep 2.4'
@@ -372,7 +415,7 @@ $ MDSH_PATHS='*.o' make \-j12 SHELL=mdsh
 .fi
 .RE
 .PP
-Real-life usage via make:
+Other real-life usages via make:
 .PP
 .RS
 .nf
@@ -399,10 +442,12 @@ mode. The workaround is to invoke
 .B mdsh
 under a name that IS on the list. A symlink
 .B "rksh \-> mdsh"
-is probably the best choice, since
+is probably the best choice since
 .B rksh
-is recognized but almost nobody uses it as an actual shell; it may be
-simplest to always use that name and avoid surprises.
+is on the list but almost nobody uses it as an actual shell. In fact
+it may be preferred to always use
+.B mdsh
+by that alternate name to avoid surprises.
 .
 .SH FILES
 .TP
@@ -423,8 +468,7 @@ The usage message printed by
 .B \-\-help
 and
 .B \-\-HELP
-is generated from the source and is the most complete and up-to-date
-documentation.
+should be considered the most complete and up-to-date documentation.
 .PP
 A basename pattern in
 .B MDSH_PATHS

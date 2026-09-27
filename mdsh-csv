@@ -38,6 +38,7 @@ Show the 10 commands which finished under the highest system load:
 import argparse
 import glob
 import os.path as op
+import sys
 
 CSV_HDR = ('START TIME', 'PID', 'PPID', 'STATUS', 'ELAPSED',
            'USER TIME', 'SYS TIME', 'LOAD AVG', 'MAKELEVEL', 'PWD', 'COMMAND')
@@ -55,6 +56,30 @@ def numeric(field):
         return float('-inf')
 
 
+def read_data(paths, truncate):
+    """Parse the CSV lines in the named files into a list of field lists."""
+    data = []
+
+    # Sorting is stable so visiting paths in order keeps the report
+    # deterministic when the sort key has duplicate values. File names
+    # begin with the start time so this is chronological.
+    for path in sorted(paths):
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                # The command is last and may contain commas so limit
+                # the split to the number of fields.
+                datum = line.strip().split(',', maxsplit=len(CSV_HDR) - 1)
+                # Ignore blank lines along with any header line, which
+                # may be present if this is the output of an earlier -c.
+                if len(datum) != len(CSV_HDR) or datum[0] == CSV_HDR[0]:
+                    continue
+                if truncate and len(datum[-1]) > truncate:
+                    datum[-1] = datum[-1][:truncate] + ' ...'
+                data.append(datum)
+
+    return data
+
+
 def main():
     """Conventional entry point for command line use."""
     parser = argparse.ArgumentParser(
@@ -64,7 +89,8 @@ def main():
         '-c', '--concatenate', action='store_true',
         help="dump all .csv files to stdout, sorted by duration")
     parser.add_argument(
-        '-k', '--key', type=int, default=5,
+        '-k', '--key', type=int, default=ELAPSED + 1,
+        metavar='N',
         help="sort on the specified key [%(default)s (elapsed time)]")
     parser.add_argument(
         '-m', '--max', type=int, default=0,
@@ -79,23 +105,18 @@ def main():
         help="path to dir containing generated MDSH .csv files")
     opts = parser.parse_args()
 
-    data = []
+    if not 1 <= opts.key <= len(CSV_HDR):
+        parser.error(f'--key must be from 1 to {len(CSV_HDR)}')
 
     if op.isdir(opts.path):
         paths = glob.glob(op.join(opts.path, '*.csv'))
     else:
         paths = [opts.path]
 
-    for path in paths:
-        with open(path, encoding='utf-8') as f:
-            for line in f:
-                # The command is last and may contain commas so limit
-                # the split to the number of fields.
-                datum = line.strip().split(',', maxsplit=len(CSV_HDR) - 1)
-                if opts.truncate and len(datum[-1]) > opts.truncate:
-                    datum[-1] = datum[-1][:opts.truncate] + ' ...'
-                data.append(datum)
-    assert data, 'no CSV data found'
+    data = read_data(paths, opts.truncate)
+
+    if not data:
+        sys.exit(f'{parser.prog}: error: no CSV data found')
 
     key = opts.key - 1
     if key < PWD:
@@ -105,7 +126,7 @@ def main():
 
     if opts.concatenate:
         print(','.join(CSV_HDR))
-        for i, datum in enumerate(data):
+        for datum in data:
             print(','.join(datum))
         return
 
@@ -122,10 +143,7 @@ def main():
         started = str(round(float(datum[0]) - time_zero, 1))
         elapsed = str(round(float(datum[ELAPSED]), 1))
         load = datum[LOADAVG]
-        cmd = datum[-1]
-        if opts.truncate and len(cmd) > opts.truncate:
-            cmd = cmd[:opts.truncate] + ' ...'
-        print(fmt % (started, elapsed, load, cmd))
+        print(fmt % (started, elapsed, load, datum[-1]))
 
 
 if __name__ == '__main__':

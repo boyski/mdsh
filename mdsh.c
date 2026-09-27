@@ -87,6 +87,7 @@ static size_t baselen;
 #define EV_PRE_FLUSH_PATHS PFX "_PRE_FLUSH_PATHS"
 #define EV_POST_FLUSH_PATHS PFX "_POST_FLUSH_PATHS"
 #define EV_HTTP_SERVER PFX "_HTTP_SERVER"
+#define EV_IGNORE PFX "_IGNORE"
 #define EV_XTEVS PFX "_XTEVS"
 #define EV_ABSPATH PFX "_ABSPATH"
 #define EV_BASEDIR PFX "_BASEDIR"
@@ -104,7 +105,10 @@ static size_t baselen;
 #define CSV_HDR "START TIME,PID,PPID,STATUS,ELAPSED,USER TIME,SYS TIME,LOAD AVG,MAKELEVEL,PWD,COMMAND\n"
 #define CSV_FMT "%lld.%09ld,%d,%d,%d,%f,%lld.%06ld,%lld.%06ld,%s,%s,%s,%s\n"
 
-#define DEFAULT_MARKER "==-=="
+#define DEFAULT_MARKER "=-="
+
+// Directory names the tree walk never descends into by default.
+#define DEFAULT_IGNORE ".git:.svn"
 
 #define SEP ":"
 
@@ -146,8 +150,6 @@ static size_t baselen;
 #define INSIST_MSG(cond, ...) do { \
     if (!(cond)) {INSIST_DIE_(#cond, ": " __VA_ARGS__);} \
 } while (0)
-
-#define LASTCHAR(str) (strrchr(str, '\0') - 1)
 
 // C11 has _Noreturn but this spelling is accepted in any mode.
 #ifdef __GNUC__
@@ -198,6 +200,12 @@ removed, never when an entry within them changes.\n",
         EV_PATHS);
 
     fprintf(f, "\n\
+%s: a colon-separated list of glob patterns; the %s tree walk\n\
+never descends into a directory whose base name matches one of\n\
+them [%s]. An empty value skips nothing.\n",
+        EV_IGNORE, EV_PATHS, DEFAULT_IGNORE);
+
+    fprintf(f, "\n\
 %s: if set (nonzero), %s pathnames are made absolute.\n",
         EV_ABSPATH, EV_PATHS);
 
@@ -211,10 +219,12 @@ along with each %s change message.\n",
         EV_MARKER);
 
     fprintf(f, "\n\
-%s: by default %s cleans up whitespace in commands\n\
-before printing them because make recipes often expand to long\n\
-hard-to-read strings containing multiple spaces and newlines. This\n\
-flag will suppress that behavior.\n",
+%s: by default %s tidies whitespace in commands as\n\
+printed because build recipes often expand to strings full of\n\
+line continuations, tabs, and runs of spaces. Whitespace that\n\
+has no effect on shell semantics is simplified away.\n\
+This flag suppresses that cleanup except that CSV still\n\
+replaces newlines with semicolons to keep records on one line.\n",
         EV_NOFIXUP, prog);
 
     fprintf(f, "\n\
@@ -309,21 +319,23 @@ rksh -> mdsh since rksh is on the list but almost no one uses it.\n");
     }
 
     fprintf(f, "\n\
-EXAMPLES (run in sequence):\n\n\
+EXAMPLES (these commands to be run in sequence):\n\n\
+$ rm -f foo bar\n\
+\n\
 $ MDSH_PATHS=foo:bar %s -c 'touch foo'\n\
-%s: ==-== CREATED: foo\n\
+%s: =-= CREATED: foo\n\
 \n\
 $ MDSH_PATHS=foo:bar %s -c 'touch foo bar'\n\
-%s: ==-== MODIFIED: foo\n\
-%s: ==-== CREATED: bar\n\
+%s: =-= MODIFIED: foo\n\
+%s: =-= CREATED: bar\n\
 \n\
 $ MDSH_PATHS=foo:bar %s -c 'grep blah foo bar'\n\
-%s: ==-== ACCESSED: foo\n\
-%s: ==-== ACCESSED: bar\n\
+%s: =-= ACCESSED: foo\n\
+%s: =-= ACCESSED: bar\n\
 \n\
 $ MDSH_PATHS=foo:bar MDSH_VERBOSE=1 %s -c 'rm -f foo bar'\n\
-%s: ==-== REMOVED: foo [/bin/sh -c rm -f foo bar]\n\
-%s: ==-== REMOVED: bar [/bin/sh -c rm -f foo bar]\n\
+%s: =-= REMOVED: foo [/bin/sh -c rm -f foo bar]\n\
+%s: =-= REMOVED: bar [/bin/sh -c rm -f foo bar]\n\
 \n\
 $ [repeat previous command]\n\
 (no state change messages, the files are already gone)\n\
@@ -331,7 +343,7 @@ $ [repeat previous command]\n\
 $ MDSH_TIMING=1 %s -c 'sleep 2.4'\n\
 + [MDSH_TIMING: 2.4s] %s -c 'sleep 2.4'\n\
 \n\
-Real-life usage via make:\n\n\
+Other real-life usages via make:\n\n\
 $ MDSH_PATHS=foobar MDSH_VERBOSE=1 make -j12 SHELL=%s ...\n\
 \n\
 $ make SHELL=%s MDSH_DBGSH=1 ...\n\
@@ -518,8 +530,30 @@ watch_add(const char *path, int created, const struct stat *sb)
     }
 }
 
-// Directories which are never descended into during the walk.
-static const char *prunedirs[] = {".git", ".svn"};
+// Glob patterns matched against the base name of each directory
+// met during the walk, from EV_IGNORE. A directory matching any of
+// them is never descended into. An empty value leaves the list
+// empty so that nothing is skipped.
+static char **prunedirs;
+static size_t nprunedirs;
+
+static void
+prunedirs_init(void)
+{
+    char *buf, *dir;
+
+    if (!(buf = getenv(EV_IGNORE))) {
+        buf = DEFAULT_IGNORE;
+    }
+
+    // The list keeps pointers into this copy so it is never freed.
+    INSIST((buf = strdup(buf)) != NULL);
+    for (dir = strtok(buf, SEP); dir; dir = strtok(NULL, SEP)) {
+        INSIST((prunedirs = realloc(prunedirs,
+                (nprunedirs + 1) * sizeof(char *))) != NULL);
+        prunedirs[nprunedirs++] = dir;
+    }
+}
 
 // Pruning the walk requires a GNU extension. Elsewhere the
 // uninteresting subtrees must still be walked and their contents
@@ -536,15 +570,22 @@ static const char *prunedirs[] = {".git", ".svn"};
 static int
 under_prunedir(const char *path)
 {
-    const char *sl;
+    char comp[PATH_MAX];
+    const char *start, *sl;
     size_t i, len;
 
-    for (i = 0; i < sizeof(prunedirs) / sizeof(prunedirs[0]); i++) {
-        len = strlen(prunedirs[i]);
-        for (sl = path; (sl = strchr(sl, '/')); sl++) {
-            if ((size_t)(sl - path) >= len &&
-                    !strncmp(sl - len, prunedirs[i], len) &&
-                    (sl - len == path || *(sl - len - 1) == '/')) {
+    // Each component up to the last is a directory we may have been
+    // asked to ignore.
+    for (start = path; (sl = strchr(start, '/')); start = sl + 1) {
+        if ((len = (size_t)(sl - start)) == 0 || len >= sizeof(comp)) {
+            continue;
+        }
+
+        (void)memcpy(comp, start, len);
+        comp[len] = '\0';
+
+        for (i = 0; i < nprunedirs; i++) {
+            if (!fnmatch(prunedirs[i], comp, 0)) {
                 return 1;
             }
         }
@@ -578,8 +619,8 @@ watch_visit(const char *path, const struct stat *sb, int type,
     // Version control metadata changes constantly and is of no
     // interest, so prune those directories entirely.
     if (type == FTW_D) {
-        for (i = 0; i < sizeof(prunedirs) / sizeof(prunedirs[0]); i++) {
-            if (!strcmp(path + ftwbuf->base, prunedirs[i])) {
+        for (i = 0; i < nprunedirs; i++) {
+            if (!fnmatch(prunedirs[i], path + ftwbuf->base, 0)) {
                 return FTW_SKIP_SUBTREE;
             }
         }
@@ -654,6 +695,44 @@ watch_paths(const char *patterns, int after)
     free(buf);
 }
 
+// Tidy the whitespace in a command for readability. A backslash
+// followed by a newline is a shell line continuation which the shell
+// itself removes, so it collapses to a single space. A newline on its
+// own separates commands and becomes nlrep. Tabs become spaces, runs
+// of spaces are squeezed to one, and leading and trailing spaces are
+// dropped. Nothing else is touched, so the shell semantics are
+// preserved, but see the caveat in xtrace() below.
+static void
+fixup_cmd(char *str, char nlrep)
+{
+    char *rd, *wr, ch;
+
+    for (rd = wr = str; *rd; rd++) {
+        if (*rd == '\\' && rd[1] == '\n') {
+            rd++;               // Consume the newline along with it.
+            ch = ' ';
+        } else if (*rd == '\n' || *rd == '\t') {
+            ch = *rd == '\t' ? ' ' : nlrep;
+        } else {
+            ch = *rd;
+        }
+
+        // Squeezing a space which follows one, or which would be
+        // first, also serves to trim the front of the string.
+        if (ch == ' ' && (wr == str || wr[-1] == ' ')) {
+            continue;
+        }
+
+        *wr++ = ch;
+    }
+
+    if (wr > str && wr[-1] == ' ') {
+        wr--;
+    }
+
+    *wr = '\0';
+}
+
 static void
 xtrace(int argc, char *argv[], const char *pfx, const char *timing)
 {
@@ -682,7 +761,6 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
     }
     for (i = 0; i < argc; i++) {
         char *original, *printable;
-        int j, k;
 
         // The handling of whitespace and quoting here is rudimentary
         // but it's only for visual purposes. No commitment is made
@@ -693,32 +771,9 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
         INSIST((original = printable = strdup(argv[i])) != NULL);
 
         if (fixup) {
-            // Treat all whitespace the same for printing purposes.
-            for (j = 0; printable[j]; j++) {
-                switch (printable[j]) {
-                    case '\n': case '\t':
-                        printable[j] = ' ';
-                        break;
-		    default:
-                        break;
-                }
-            }
-
-            // Trim whitespace from front and back of each printable word.
-            while (*printable && *(LASTCHAR(printable)) == ' ') {
-                *(LASTCHAR(printable)) = '\0';
-            }
-            while (*printable == ' ') {
-                printable++;
-            }
-
-            // Squeeze runs of multiple consecutive spaces.
-            for (j = 0, k = 0; printable[j]; j++) {
-                if (printable[j] != ' ' || (k && printable[k - 1] != ' ')) {
-                    printable[k++] = printable[j];
-                }
-            }
-            printable[k] = '\0';
+            // Newlines are command separators here as elsewhere but
+            // a space reads better on a one-line trace.
+            fixup_cmd(printable, ' ');
         }
 
         if (strchr(printable, ' ')) {
@@ -959,11 +1014,9 @@ nfs_flush(const char *ev)
                 char *tpath;
 
                 while ((dp = readdir(odir))) {
-                    if (!strcmp(dp->d_name, ".git") || !strcmp(dp->d_name, ".svn")) {
-                        // Ignore obvious SCM/VCS subdirectories.
-                    } else if (dp->d_name[0] == '.') {
-                        // Ignore all "dot" files, unlikely to be used in a build.
-                    } else {
+		    // Ignore all "dot" files, unlikely to be used in a build.
+		    // This includes obvious SCM subdirectories like ".git".
+                    if (dp->d_name[0] != '.') {
                         INSIST(asprintf(&tpath, "%s/%s", path, dp->d_name) != -1);
                         nfs_flush_dir(tpath);
                         (void)http_request(http_server, tpath);
@@ -991,6 +1044,7 @@ main(int argc, char *argv[])
     argv_ = argv; // Hack to preserve command line for later verbosity.
     fixup = ev2int(EV_NOFIXUP) ? 0 : 1;
     verbose = ev2int(EV_VERBOSE); // Global verbosity flag.
+    prunedirs_init();
 
     // The first mdsh in a process tree fixes the base dir.
     // An inherited value is left alone.
@@ -1015,10 +1069,12 @@ main(int argc, char *argv[])
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
 
-    if (!strcmp(argv[argc - 1], "-h") || !strcmp(argv[argc - 1], "--help")) {
-        usage(0, 1);
-    } else if (!strcmp(argv[argc - 1], "-H") || !strcmp(argv[argc - 1], "--HELP")) {
-        usage(0, 2);
+    if (argc == 2) {
+	if (!strcmp(argv[argc - 1], "-h") || !strcmp(argv[argc - 1], "--help")) {
+	    usage(0, 1);
+	} else if (!strcmp(argv[argc - 1], "-H") || !strcmp(argv[argc - 1], "--HELP")) {
+	    usage(0, 2);
+	}
     }
 
     if (!(shell = getenv(EV_SHELL))) {
@@ -1141,20 +1197,33 @@ main(int argc, char *argv[])
             char loadbuf[32];
             double loadavg[1];
 
-            // Strip meaningless newlines from front and back.
+            // Strip meaningless whitespace from front and back. This
+            // must cover spaces and tabs too, not just newlines, or a
+            // trailing newline preceded by a space would survive below
+            // as a semicolon.
             INSIST((cmdbuf = cmd = strdup(argv[argc - 1])));
-            while (*cmd == '\n') {
+            while (*cmd && strchr(" \t\n", *cmd)) {
                 cmd++;
             }
-            while (*cmd && *(endof(cmd) - 1) == '\n') {
+            while (*cmd && strchr(" \t\n", *(endof(cmd) - 1))) {
                 *(endof(cmd) - 1) = '\0';
             }
 
-            // Convert interior newlines to semicolons in order to keep
-            // all recipes on one line.
-            for (p = cmd; *p; p++) {
-                if (*p == '\n') {
-                    *p = ';';
+            // A trailing backslash was a line continuation whose
+            // newline has just been removed, so it means nothing now.
+            if (*cmd && *(endof(cmd) - 1) == '\\') {
+                *(endof(cmd) - 1) = '\0';
+            }
+
+            if (fixup) {
+                fixup_cmd(cmd, ';');
+            } else {
+                // Interior newlines must become semicolons even when
+                // not tidying, to keep each record on one line.
+                for (p = cmd; *p; p++) {
+                    if (*p == '\n') {
+                        *p = ';';
+                    }
                 }
             }
 
