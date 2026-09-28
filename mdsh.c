@@ -142,12 +142,14 @@ static size_t baselen;
 // supporting text. Neither macro is called with an empty variadic
 // argument since ISO C only allows that from C23 onward.
 #define INSIST(cond) do { \
+    errno = 0; /* avoid stale errno */ \
     if (!(cond)) {INSIST_DIE_(#cond, "%s", "");} \
 } while (0)
 
 // As INSIST above plus a printf() style format string and its
 // arguments, printed after the condition.
 #define INSIST_MSG(cond, ...) do { \
+    errno = 0; /* avoid stale errno */ \
     if (!(cond)) {INSIST_DIE_(#cond, ": " __VA_ARGS__);} \
 } while (0)
 

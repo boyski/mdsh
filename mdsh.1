@@ -313,6 +313,31 @@ The modification time advanced.
 .B ACCESSED
 The access time advanced.
 .PP
+It's important to understand that
+.B mdsh
+can only sample state before and after the shell runs; the shell
+job itself is a black box. Consider a
+.B "make \-j20"
+in which one recipe creates
+.BR foobar.o .
+That job will (correctly) show the file as CREATED since it wasn't
+there before and is there after. However, with \-j20 up to 19 other
+recipes may start around the same time and any subset of them may
+experience the same result;
+.B foobar.o
+didn't exist as of start time and did
+afterward, so they'll also report it as CREATED even though they didn't
+touch it. This is an unavoidable side effect of parallelism, so either do
+your diagnostic work in \-j1 or live with these redundant reports.
+.PP
+Recursive builds compound this from the other direction; a command which
+invokes a sub-build doesn't finish until the sub-build does so its time
+window spans everything which happened inside it. Therefore both top build
+and sub-build may report some of the same changes even though the work was
+done exclusively by the sub-build. The
+.B $(MAKELEVEL)
+prefix can be used to disambiguate such cases.
+.PP
 Paths are reported relative to the directory of the first
 .B mdsh
 in the process tree so a file keeps the same name at every level of a
