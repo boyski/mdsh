@@ -388,6 +388,7 @@ static void
 report(const char *path, const char *change)
 {
     char *marker = getenv(EV_MARKER);
+    char *space;
     char *mlev = getenv("MAKELEVEL");
     static char *cwd;   // Ours never changes, so look it up once.
     char *abspath = NULL;
@@ -411,13 +412,14 @@ report(const char *path, const char *change)
     }
 
     // Recursive make means the same file mod could be seen by
-    // multiple makes so the report shows GNU make's $(MAKELEVEL)
-    // for disambiguation if present.
+    // multiple makes, so show GNU make's $(MAKELEVEL) for
+    // disambiguation if present.
     marker = marker ? marker : DEFAULT_MARKER;
+    space = *marker ? " " : "";
     if (mlev) {
-	fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, marker, change, path);
+	fprintf(stderr, "%s: [%s] %s%s%s: %s", prog, mlev, marker, space, change, path);
     } else {
-	fprintf(stderr, "%s: %s %s: %s", prog, marker, change, path);
+	fprintf(stderr, "%s: %s%s%s: %s", prog, marker, space, change, path);
     }
 
     if (verbose) {
@@ -754,7 +756,7 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
     }
 
     fputs(pfx ? pfx : "+ ", stderr);
-    if (marker) {
+    if (marker && *marker) {
         fputs(marker, stderr);
         fputc(' ', stderr);
     }
