@@ -190,6 +190,8 @@ If you don't know what .ONESHELL is, feel free to ignore this.\n");
 %s: a colon-separated list of glob patterns representing file\n\
 paths to keep an eye on and report when the shell process changes\n\
 any of their states (created, removed, written, or accessed/read).\n\
+A command may do more than one of these to the same path, in which\n\
+case the names are joined as in CREATED+ACCESSED.\n\
 Each report is prefixed with the $(MAKELEVEL) of the reporting\n\
 process if running under GNU make because in a recursive make each\n\
 make in the chain may report the same change.\n\
@@ -452,6 +454,8 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
 {
     pathtimes_s *pt = *((pathtimes_s * const *)nodep);
     struct stat stbuf;
+    char changes[32];
+    int created, modified = 0, accessed = 0;
 
     (void)depth; // don't need this
 
@@ -459,25 +463,49 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
         return;
     }
 
-    if (pt->created) {
-        report(pt->path, "CREATED");
-    } else if (stat(pt->path, &stbuf) == -1) {
+    if (stat(pt->path, &stbuf) == -1) {
         if (errno != ENOENT) {
             error(pt->path, strerror(errno));
+        } else if (pt->created) {
+            report(pt->path, "CREATED");
         } else if (pt->existed) {
             report(pt->path, "REMOVED");
         }
-    } else if (!pt->existed) {
-        // E.g. a dangling symlink whose target has since appeared.
-        report(pt->path, "CREATED");
-    } else if (S_ISDIR(stbuf.st_mode) || pt->isdir) {
-        // Directory timestamps change when an entry is added or
-        // removed which says nothing about the directory itself.
         return;
-    } else if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
-        report(pt->path, "MODIFIED");
-    } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
-        report(pt->path, "ACCESSED");
+    }
+
+    // Either first matched after the command, or present now but
+    // not stat-able before it, as with a dangling symlink whose
+    // target has since appeared.
+    created = pt->created || !pt->existed;
+
+    // Directory timestamps change when an entry is added or
+    // removed which says nothing about the directory itself.
+    if (!S_ISDIR(stbuf.st_mode) && !pt->isdir) {
+        if (created) {
+            // Being new there is no "before" to compare against,
+            // but a read which came after the write leaves atime
+            // later than mtime. A subsequent write hides an
+            // earlier read this way, as does a copy which
+            // preserves the times of its source.
+            accessed = TIME_GT(stbuf.st_atim, stbuf.st_mtim);
+        } else {
+            modified = TIME_GT(stbuf.st_mtim, pt->times[1]);
+            accessed = TIME_GT(stbuf.st_atim, pt->times[0]);
+        }
+    }
+
+    // A command may do more than one of these to the same file,
+    // e.g. create it and read it back, so report every change
+    // seen rather than only the most significant. Creation and
+    // modification are mutually exclusive so at most two names
+    // are joined.
+    if (created || modified || accessed) {
+        (void)snprintf(changes, sizeof(changes), "%s%s%s",
+            created ? "CREATED" : modified ? "MODIFIED" : "",
+            (created || modified) && accessed ? "+" : "",
+            accessed ? "ACCESSED" : "");
+        report(pt->path, changes);
     }
 }
 

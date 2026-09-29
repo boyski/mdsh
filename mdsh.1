@@ -338,6 +338,13 @@ done exclusively by the sub-build. The
 .B $(MAKELEVEL)
 prefix can be used to disambiguate such cases.
 .PP
+A shell command may access a file in multiple ways, e.g. it may write to
+it and later read it. In such a case as much as can be inferred from file
+metadata will be shown. Specifically, writes bump mtime while reads bump
+atime; both of these can be detected at shell exit time resulting in
+.BR MODIFIED+ACCESSED .
+Files created and removed in the same command are invisible.
+.PP
 Paths are reported relative to the directory of the first
 .B mdsh
 in the process tree so a file keeps the same name at every level of a
